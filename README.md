@@ -1,0 +1,450 @@
+<p align="center">
+  <img src="https://i.ibb.co/Q3rdHyy0/Chat-GPT-Image-30-jul-2026-22-01-40.png" width="220" alt="Wife logo" />
+</p>
+
+<h1 align="center">Wife</h1>
+
+<p align="center">
+  <strong>remembers everything</strong>
+</p>
+
+<p align="center">
+  Local, persistent and auditable memory layer for Claude Code and Codex.<br/>
+  Your agent stops treating you like a stranger every morning.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ma-nucho-pro/wife/actions/workflows/ci.yml"><img src="https://github.com/ma-nucho-pro/wife/actions/workflows/ci.yml/badge.svg" alt="tests" /></a>
+  <img src="https://img.shields.io/badge/license-MIT-8fbf6a?style=for-the-badge" alt="license MIT" />
+  <img src="https://img.shields.io/badge/dependencies-0-2ea043?style=for-the-badge" alt="zero dependencies" />
+  <img src="https://img.shields.io/badge/local--first-no%20cloud-ff6b8a?style=for-the-badge" alt="local first" />
+  <img src="https://img.shields.io/badge/Claude%20Code-supported-f5a623?style=for-the-badge" alt="Claude Code supported" />
+  <img src="https://img.shields.io/badge/Codex-supported-444444?style=for-the-badge" alt="Codex supported" />
+  <img src="https://img.shields.io/badge/node-%E2%89%A518.17-6f42c1?style=for-the-badge" alt="node 18.17+" />
+</p>
+
+<p align="center">
+  <a href="#why">Why</a> •
+  <a href="#what-it-actually-does">What it does</a> •
+  <a href="#install">Install</a> •
+  <a href="#how-it-works">How it works</a> •
+  <a href="#commands">Commands</a> •
+  <a href="#security">Security</a> •
+  <a href="#faq">FAQ</a>
+</p>
+
+---
+
+```
+$ wife show
+
+Identity (5 facts)
+  Who
+  - Full-stack developer, mostly backend
+  - Ships side projects solo, nights and weekends
+  Preferences
+  - Prefers short, implementation-first answers
+  - Dislikes long explanations of things already known
+  Working style
+  - Always answer in Spanish
+  █░░░░░░░░░░░░░░░░░░░░░░░ 61/1200 tokens
+
+Project · checkout-api (3 facts)
+  Stack
+  - Uses Postgres, Fastify and Vitest
+  Conventions
+  - Never commit directly to main
+  - Run the migrations before the test suite
+  ░░░░░░░░░░░░░░░░░░░░░░░░ 27/800 tokens
+
+Injected at session start
+  ██░░░░░░░░░░░░░░░░░░░░░░ 174/2000 tokens
+```
+
+That block is handed to Claude Code and Codex at the start of **every** session. You never typed it. Wife learned it from things you already said, and it forgets anything you delete.
+
+---
+
+## Why
+
+You explain your stack. You explain that you want short answers. You explain that this repo runs migrations before tests. The session ends.
+
+Tomorrow, you explain all of it again.
+
+That is not a context-window problem — a model handles one session fine. The problem is that **nothing survives the session boundary**, and nothing ever learns. Instruction files are documents you maintain by hand. Session resume only reaches backwards into a single conversation. Compaction throws away the parts of a session it judges irrelevant to the current task, which is exactly where facts about *you* live.
+
+Wife closes that gap with the only thing that actually works: **a curator.**
+
+---
+
+## What it actually does
+
+Storing text is trivial. The hard part — the entire product — is deciding **what deserves to be remembered, what replaces what, and what has to go.**
+
+### It waits before it believes you
+
+A fact you mention once is **staged**, not stored. It has to come back in a *different* session before it reaches long-term memory. State it deliberately — `remember that…`, `always…`, `never…`, or `wife remember` — and it lands immediately, because you meant it.
+
+This single rule is why Wife's memory stays small enough to trust.
+
+### It has a hard ceiling
+
+1200 tokens for who you are. 800 for the current project. When a section fills up, the lowest-scoring fact is **evicted**, not appended.
+
+```
+score = confidence × recency × repetition × intent
+```
+
+Recency decays on a 90-day half-life for identity, 45 days for project memory. Pinned facts never decay and are never evicted. The ceiling is the design: without it, memory grows until it costs you tokens on every single turn.
+
+### It resolves contradictions instead of stacking them
+
+Move off a framework and the old fact is **replaced**, with the change recorded. Restate something more precisely and the vaguer version is absorbed.
+
+Two statements only merge when one strictly contains the other:
+
+| Statement A | Statement B | Result |
+|---|---|---|
+| `Prefers short answers` | `Prefers short direct answers` | merged — B is more specific |
+| `Deploys to production on Friday` | `Deploys to staging on Friday` | **kept apart** — each says something the other does not |
+| `Uses Postgres` | `Uses MySQL` | kept apart |
+| `Uses Redis` | `Never uses Redis` | superseded — you changed your mind |
+
+### It only reads what you wrote
+
+Your agent's replies are **never** mined. When a model suggests "let's use Postgres" and you answer "ok", it has not learned a fact about you — it has heard its own idea repeated back. Wife reads your prompts and nothing else.
+
+### It separates you from your repo
+
+Facts about **you** follow you everywhere. Facts about **this codebase** stay in this codebase.
+
+```
+"always answer in Spanish"           →  identity      (follows you to every repo)
+"never commit directly to main"      →  checkout-api  (stays here)
+"I never deploy on Fridays"          →  identity      (your habit, not the repo's)
+"this project uses Fastify"          →  checkout-api
+```
+
+### Every single fact is traceable
+
+```
+$ wife why "short answers"
+
+Prefers short, implementation-first answers
+  store       identity · section "Preferences"
+  source      it came up in enough separate sessions to be promoted
+  confidence  0.75
+  seen        3 times across 3 sessions
+  first       2026-07-14 09:22:41
+  last        2026-07-29 18:03:12
+  score       0.847 (confidence x recency x repetition x intent)
+  you wrote   "prefiero respuestas cortas, sin tanta explicación"
+```
+
+If you cannot see where a memory came from, you cannot trust it. Wife shows you.
+
+### It is a markdown file you own
+
+`~/.wife/identity.md` is the source of truth. Open it in any editor. **Delete a line and it is forgotten** — no command needed. **Add a line by hand and it is kept at full confidence.** `git init` it if you want history.
+
+No database. No daemon. No account. No network call. Ever.
+
+---
+
+## Install
+
+### Option 1 — let your agent do it
+
+Copy this and paste it into **Claude Code** or **Codex**:
+
+```
+Install "Wife", a local memory layer for coding agents, from
+https://github.com/ma-nucho-pro/wife
+
+Do exactly this:
+1. git clone https://github.com/ma-nucho-pro/wife.git ~/.local/share/wife
+2. cd ~/.local/share/wife
+3. npm link          (this puts the `wife` command on my PATH)
+4. wife init
+5. wife attach claude          (use `wife attach codex` if you are Codex)
+6. wife status                 and show me the output
+
+Do not modify any of my existing hooks or settings beyond what
+`wife attach` does. It merges into my settings file without
+removing anything. If `npm link` fails with a permission error,
+tell me instead of using sudo.
+```
+
+Then **restart your agent**. That is it.
+
+> This repo ships a `CLAUDE.md` and an `AGENTS.md`, so if your agent is already sitting inside the cloned folder it knows how to install itself without any prompt at all.
+
+### Option 2 — one command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ma-nucho-pro/wife/main/install.sh | bash
+```
+
+### Option 3 — by hand
+
+```bash
+git clone https://github.com/ma-nucho-pro/wife.git
+cd wife
+npm link          # puts the `wife` command on your PATH
+wife init         # creates ~/.wife and attaches whatever it finds
+wife attach claude
+```
+
+On **Windows**, use Option 3 in PowerShell — the install script needs bash.
+
+Requires **Node 18.17 or newer**, which you already have if you are running Claude Code. There is no build step and **zero runtime dependencies**: the whole tool is plain Node with nothing pulled from npm.
+
+### Check it worked
+
+```bash
+wife status
+```
+
+Then open a new session. In Claude Code, `/hooks` will list three entries. Nothing else about how you work changes.
+
+### Uninstall
+
+```bash
+wife detach claude
+wife detach codex
+rm -rf ~/.wife        # only if you also want the memory gone
+```
+
+`detach` removes Wife's hooks and leaves every other hook in your settings exactly as it was.
+
+---
+
+## How it works
+
+Three hooks. No wrapper around your agent, so your workflow is untouched.
+
+```
+SessionStart      →  wife inject     puts your memory into the session
+UserPromptSubmit  →  wife capture    buffers what you typed, silently
+SessionEnd        →  wife harvest    curates the session into memory
+```
+
+The curator runs in four steps:
+
+```
+      what you typed
+            │
+   1. extract      pattern rules, Spanish and English,
+            │      tuned to miss rather than to invent
+            ▼
+   2. gate         explicit? store now.
+            │      otherwise stage it and wait for a second session
+            ▼
+   3. reconcile    reinforce · supersede on contradiction · add
+            │
+            ▼
+   4. prune        enforce the token ceiling, lowest score first
+            │
+            ▼
+     identity.md + projects/<repo>/project.md
+```
+
+**Extraction is deterministic pattern matching, not an LLM call.** No API key, no cost per session, no network, and behaviour you can read in one file and predict. It fires on the phrasings people actually use when stating something durable — `recuerda que`, `siempre`, `nunca`, `prefiero`, `no uses`, `usamos`, `me llamo`, and their English equivalents — and throws out anything that is a question, a task, code, a path, a URL, a pasted log, or a credential.
+
+**Facts are written in the language you said them in.** Spanish in, Spanish out.
+
+**Crash safety.** If your agent is killed, your laptop dies, or `SessionEnd` never fires, the buffer is picked up at the next `SessionStart`. Session buffers are the only place raw prompt text is written, and they are deleted the moment they are harvested.
+
+**The injected block reads as plain factual statements**, never as commands, so it is used as context instead of being flagged and surfaced back to you.
+
+---
+
+## Commands
+
+### Memory
+
+| Command | What it does |
+|---|---|
+| `wife remember "<fact>"` | store it now — `--project`, `--section X` |
+| `wife forget "<text>"` | remove it entirely |
+| `wife pin "<text>"` | exempt from decay and eviction |
+| `wife unpin "<text>"` | undo that |
+| `wife why "<text>"` | where it came from and what it replaced |
+| `wife edit` | open the memory file in `$EDITOR` — `--project` |
+
+### Inspect
+
+| Command | What it does |
+|---|---|
+| `wife show` | exactly what your agent will be given — `--raw`, `--verbose` |
+| `wife status` | memory size, wiring, pending buffers |
+| `wife journal` | audit trail of every change — `-n 50`, `--event added` |
+| `wife doctor` | duplicates, drift, broken wiring — `--fix` |
+| `wife config [key] [value]` | read or change settings |
+
+### Setup
+
+| Command | What it does |
+|---|---|
+| `wife init` | create `~/.wife` and attach whatever is installed |
+| `wife attach claude\|codex` | wire Wife in — `--project` for repo-local |
+| `wife detach claude\|codex` | remove it cleanly |
+| `wife sync` | refresh Wife's block in `AGENTS.md` |
+
+### Lifecycle
+
+`wife inject`, `wife capture` and `wife harvest` are what the hooks call. You rarely run them by hand, though `wife harvest --verbose` is the best way to see what the curator accepted and why it rejected the rest.
+
+---
+
+## Security
+
+Wife reads every prompt you type. That is only acceptable under strict rules, so here they are.
+
+**Credentials never reach disk.** Anything matching a credential shape disqualifies the entire candidate — it is dropped, not masked, because a masked fact still leaks its context.
+
+| Screened | Examples |
+|---|---|
+| Provider keys | `sk-…`, `sk-ant-…`, `ghp_…`, `AKIA…`, `AIza…`, `xox…`, `sk_live_…` |
+| Tokens | JWTs, `Bearer …`, `Authorization:` headers |
+| Secrets in assignments | `password=`, `api_key=`, `secret=`, `token=` |
+| Connection strings | `postgres://user:pass@…`, `mongodb+srv://…`, `redis://…` |
+| Key material | `-----BEGIN … PRIVATE KEY-----` |
+| Entropy | long hex digests and high-entropy base64 blobs |
+
+Add your own with `wife config denyPatterns '["client-name","internal-codename"]'`.
+
+**Nothing leaves your machine.** No telemetry, no analytics, no network calls, no accounts. `~/.wife` is a folder of markdown and JSON on your disk.
+
+**Raw prompts are transient.** They live in a session buffer only until that session is curated, then the buffer is deleted.
+
+**Everything is reversible.** `wife forget` removes a fact completely. Deleting a line from `identity.md` does the same. The journal records that a removal happened and when, never resurrecting the content.
+
+**Pause it whenever you want:** `wife config capture false` stops learning while still injecting what it already knows.
+
+---
+
+## Architecture
+
+```text
+~/.wife/
+  identity.md            you. hand-editable, the source of truth
+  identity.index.json    confidence, seen counts, provenance
+  projects/
+    checkout-api-a1b2c3d4/
+      project.md         this repo. same rules
+      project.index.json
+      meta.json
+  sessions/              prompt buffers, deleted once curated
+  journal.jsonl          append-only audit log
+  config.json
+```
+
+The `.md` files are what you read and edit. The `.json` sidecars hold metadata that has no readable place in a bullet list.
+
+**Markdown always wins.** On every load Wife reconciles the index against the file, so a line you delete by hand is forgotten and a line you add is adopted at full confidence. You are never fighting the tool for control of your own memory.
+
+---
+
+## Configuration
+
+```bash
+wife config                              # show everything
+wife config budget.identity 2000         # more room for who you are
+wife config promotionThreshold 3         # be even more sceptical
+wife config halfLife.project 30          # project facts go stale faster
+wife config denyPatterns '["acme-corp"]' # never store anything matching this
+wife config capture false                # pause learning, keep injecting
+```
+
+---
+
+## FAQ
+
+**Does this send anything anywhere?**
+No. There is no network code in this repo outside of `git clone` during install. Memory is markdown on your disk.
+
+**Does it cost tokens?**
+About 150–250 tokens per session, once, at the start. That is roughly what you spend re-explaining your stack in a single message.
+
+**Does it need an API key?**
+No. Extraction is pattern matching, not a model call.
+
+**What if it remembers something wrong?**
+`wife forget "<text>"`, or open `~/.wife/identity.md` and delete the line. Both are permanent.
+
+**What if it misses something important?**
+`wife remember "<fact>"` stores it immediately at full confidence. Saying `remember that…` or `always…` in a normal prompt does the same thing.
+
+**Can I use it on several machines?**
+Yes — `~/.wife` is a plain folder. `git init` it and push it to a private repo, or drop it in your dotfiles.
+
+**Does it work with both Claude Code and Codex at the same time?**
+Yes. Both read the same memory, so a fact learned in one shows up in the other.
+
+**Can I edit the memory by hand?**
+That is the intended way to use it. The markdown file is the source of truth and your edits always win.
+
+**Which languages does it understand?**
+Spanish and English out of the box, and it writes each fact back in the language you said it in. Adding a language is a rule block in `src/core/extract.js` — pull requests welcome.
+
+---
+
+## Verify it yourself
+
+```bash
+npm run check
+```
+
+**90 unit tests** plus a **77-check end-to-end run** that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
+
+- a credential pasted into a prompt never appears anywhere under `~/.wife`
+- a task ("fix the login bug") never becomes a memory
+- a preference stated once is *not* stored; stated again in a different session, it is
+- attaching over an existing settings file preserves every other hook and setting
+- attaching three times produces three handlers, not nine
+- every hook command exits 0 given no stdin, garbage stdin, a null prompt, a 500 KB prompt, or a session id of `../../../etc/passwd`
+- a corrupt index file is quarantined and recovered from instead of crashing
+- a buffer from a session that never ended is picked up at the next start
+- the CLI works through the symlink `npm link` installs, not just as a direct file
+
+CI runs the whole suite on Linux, macOS and Windows across Node 18, 20 and 22.
+
+---
+
+## Contributing
+
+Wife is **open source under the MIT license**. Fork it, modify it, ship it inside your own tools, use it commercially. The only condition is the one MIT already sets: **keep the copyright notice and attribution to Roberto Manuel Jara Peche.**
+
+Good places to start:
+
+- **Add a language.** A rule block and a label set in `src/core/extract.js`, plus tests.
+- **Sharpen the extractor.** If a phrasing you use constantly is being missed, add a rule for it.
+- **Improve scoping.** The heuristic that decides "about me" versus "about this repo" can always get better.
+- **Add an agent.** The integration surface is one file per agent in `src/agents/`.
+
+Every pull request must keep `npm run check` green. New behaviour needs a test — that rule is why this repo is trustworthy.
+
+Found a bug or have an idea? [Open an issue](https://github.com/ma-nucho-pro/wife/issues).
+
+---
+
+## Author
+
+**Roberto Manuel Jara Peche**
+
+<p>
+  <a href="https://github.com/ma-nucho-pro"><img src="https://img.shields.io/badge/GitHub-ma--nucho--pro-181717?style=for-the-badge&logo=github" alt="GitHub" /></a>
+  <a href="https://www.youtube.com/@ManuchoAI"><img src="https://img.shields.io/badge/YouTube-@ManuchoAI-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube" /></a>
+  <a href="https://x.com/ManuchoAI"><img src="https://img.shields.io/badge/X-@ManuchoAI-000000?style=for-the-badge&logo=x&logoColor=white" alt="X" /></a>
+  <a href="https://www.instagram.com/robertmanuchojp/"><img src="https://img.shields.io/badge/Instagram-robertmanuchojp-E4405F?style=for-the-badge&logo=instagram&logoColor=white" alt="Instagram" /></a>
+  <a href="https://www.linkedin.com/in/roberto-manuel-jara-peche-10867240b/"><img src="https://img.shields.io/badge/LinkedIn-Roberto%20Manuel%20Jara%20Peche-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn" /></a>
+</p>
+
+If Wife saves you from re-explaining yourself, a ⭐ on the repo helps other people find it.
+
+---
+
+## License
+
+MIT © 2026 Roberto Manuel Jara Peche — see [LICENSE](LICENSE).
