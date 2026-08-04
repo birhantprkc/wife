@@ -217,7 +217,14 @@ function startsWithTaskVerb(text) {
   return TASK_VERBS.some((v) => n === v || n.startsWith(`${v} `));
 }
 
-export function judge(text, denyPatterns = []) {
+/**
+ * @param {object} [options]
+ * @param {boolean} [options.allowImperative] Accept imperative phrasing. Instruction
+ *   files are written in the imperative ("Write tests with Vitest", "Use pnpm"),
+ *   where it means a standing rule. In a live prompt the same words mean "do this
+ *   now", so the task filter stays on by default and is only relaxed for import.
+ */
+export function judge(text, denyPatterns = [], options = {}) {
   // Judge the raw string, not the tidied one. tidy() truncates, and judging
   // after truncation let a 400-word paragraph pass as a clipped fragment.
   const raw = String(text || '').replace(/\s+/g, ' ').trim();
@@ -225,7 +232,7 @@ export function judge(text, denyPatterns = []) {
   const secret = detectSecret(raw, denyPatterns);
   if (secret) return { ok: false, reason: REJECTIONS.SECRET, detail: secret };
   if (raw.includes('?') || raw.includes('¿')) return { ok: false, reason: REJECTIONS.QUESTION };
-  if (startsWithTaskVerb(raw)) return { ok: false, reason: REJECTIONS.TASK };
+  if (!options.allowImperative && startsWithTaskVerb(raw)) return { ok: false, reason: REJECTIONS.TASK };
   if (looksLikeCode(raw)) return { ok: false, reason: REJECTIONS.CODE };
   // Two words is the floor, not three: a rendered fact like "Usa Kotlin" is
   // perfectly good, while the character minimum still throws out "ok sure".

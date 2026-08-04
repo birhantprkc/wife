@@ -6,13 +6,14 @@ import { cmdInject, cmdCapture, cmdHarvest } from '../src/commands/hooks.js';
 import { cmdRemember, cmdForget, cmdPin, cmdWhy } from '../src/commands/memory.js';
 import { cmdShow, cmdStatus, cmdJournal, cmdEdit } from '../src/commands/inspect.js';
 import { cmdInit, cmdAttach, cmdDetach, cmdSync, cmdDoctor, cmdConfig } from '../src/commands/setup.js';
+import { cmdImport, cmdReview, cmdSpread } from '../src/commands/curate.js';
 import { c, say, fail } from '../src/util/out.js';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 const BOOLEAN_FLAGS = new Set([
   'help', 'version', 'verbose', 'quiet', 'json', 'raw', 'stdin', 'fix', 'force',
-  'project', 'user', 'all', 'no-claude', 'no-codex',
+  'project', 'user', 'all', 'no-claude', 'no-codex', 'dry-run', 'list',
 ]);
 
 /** Minimal argv parser. No dependency is worth taking for this. */
@@ -57,6 +58,9 @@ ${c.bold('Setup')}
   sync                     refresh the block wife writes into AGENTS.md
 
 ${c.bold('Memory')}
+  import                   seed from your existing CLAUDE.md / AGENTS.md  ${c.gray('[--dry-run]')}
+  review                   decide what stays: candidates and dormant facts
+  spread                   facts showing up across more than one repo
   remember "<fact>"        store something now  ${c.gray('[--project] [--section X]')}
   forget "<text>"          remove it completely  ${c.gray('[--all]')}
   pin "<text>"             exempt from decay and budget eviction
@@ -84,6 +88,9 @@ const ROUTES = {
   attach: cmdAttach,
   detach: cmdDetach,
   sync: cmdSync,
+  import: cmdImport,
+  review: cmdReview,
+  spread: cmdSpread,
   remember: cmdRemember,
   forget: cmdForget,
   pin: (a) => cmdPin(a),

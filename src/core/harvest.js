@@ -4,6 +4,7 @@ import { openIdentity, openProject } from './memory.js';
 import { readSession, dropSession, listSessions } from './session.js';
 import { record } from './journal.js';
 import { sep } from 'node:path';
+import { sight, spread, promote } from './crossproject.js';
 
 /**
  * The curator. Everything upstream of here is plumbing; this is where the
@@ -26,6 +27,7 @@ export function harvestSession(sessionId, { config = loadConfig(), identity = nu
     sessionId,
     prompts: entries.length,
     added: [], reinforced: [], superseded: [], staged: [], rejected: [], pruned: [],
+    dormant: [], revived: [], promoted: [],
     stores: new Set(),
   };
   if (!entries.length) {
@@ -70,15 +72,28 @@ export function harvestSession(sessionId, { config = loadConfig(), identity = nu
         ? target.upsert({ ...payload, source: 'explicit' })
         : target.stage({ ...payload, threshold: config.promotionThreshold });
 
+      // A project fact seen in enough separate repos is really about the person.
+      if (c.scope !== 'user' && (result.action === 'added' || result.action === 'reinforced')) {
+        const p = projectFor(entry.cwd);
+        if (sight({ text: c.text, projectKey: p.key, threshold: config.crossProjectThreshold })) {
+          const up = promote(id, spread(config.crossProjectThreshold).find((e) => e.text === c.text) || { text: c.text, projects: [] });
+          if (up.action !== 'unchanged') report.promoted.push({ text: c.text });
+        }
+      }
+
       if (result.action === 'added') report.added.push({ ...c, store: label });
       else if (result.action === 'reinforced') report.reinforced.push({ ...c, store: label });
+      else if (result.action === 'revived') report.revived.push({ ...c, store: label });
       else if (result.action === 'superseded') report.superseded.push({ ...c, store: label, previous: result.previous });
       else if (result.action === 'staged') report.staged.push({ ...c, store: label, sessions: result.sessions, needed: result.needed });
     }
   }
 
   for (const store of touched) {
-    const budget = store.scope === 'user' ? config.budget.identity : config.budget.project;
+    const isUser = store.scope === 'user';
+    const budget = isUser ? config.budget.identity : config.budget.project;
+    const window = isUser ? config.dormancy.identity : config.dormancy.project;
+    for (const gone of store.goDormant(window)) report.dormant.push({ text: gone.text, days: gone.days, store: store.scope });
     for (const evicted of store.prune(budget)) report.pruned.push({ text: evicted.text, store: store.scope });
     store.expirePending();
     store.save();

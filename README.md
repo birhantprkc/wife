@@ -110,6 +110,33 @@ Two statements only merge when one strictly contains the other:
 | `Uses Postgres` | `Uses MySQL` | kept apart |
 | `Uses Redis` | `Never uses Redis` | superseded — you changed your mind |
 
+### It lets go of what you stopped believing
+
+Contradict a fact and it is replaced on the spot. But most beliefs don't die
+that cleanly — you just quietly stop working that way, and never say so.
+
+Go quiet about something for long enough and it goes **dormant**: out of the
+injected context, still visible in the file under `## Dormant`. Say it again and
+it comes straight back. Delete the line and it's gone for good.
+
+```
+## Dormant
+_Not mentioned in a long time, so these are no longer sent to the agent._
+_Say one again and it comes back. Delete the line to forget it for good._
+- Uses Redis for caching
+```
+
+120 days for identity, 60 for the project, doubled for anything you stated
+deliberately. Pinned facts never go dormant — that's what pinning is for.
+
+### It notices what follows you between repos
+
+Say "never commit directly to main" in one codebase and it's a house rule. Say
+it in your last three codebases and it's how you work. At three repos, a project
+fact is promoted into identity automatically, where it follows you everywhere.
+
+`wife spread` shows what's on its way there.
+
 ### It only reads what you wrote
 
 Your agent's replies are **never** mined. When a model suggests "let's use Postgres" and you answer "ok", it has not learned a fact about you — it has heard its own idea repeated back. Wife reads your prompts and nothing else.
@@ -199,6 +226,20 @@ On **Windows**, use Option 3 in PowerShell — the install script needs bash.
 
 Requires **Node 18.17 or newer**, which you already have if you are running Claude Code. There is no build step and **zero runtime dependencies**: the whole tool is plain Node with nothing pulled from npm.
 
+### Already have a CLAUDE.md? Start from it.
+
+```bash
+wife import          # --dry-run to see it first
+```
+
+Reads `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and this repo's `CLAUDE.md`
+or `AGENTS.md`, and seeds memory from them. The scope of the file decides the
+scope of the fact: your user file becomes identity, the repo's file becomes
+project memory.
+
+Credentials are screened out before anything is written, code blocks and
+install steps are ignored, and Wife never re-reads its own managed block.
+
 ### Check it worked
 
 ```bash
@@ -265,6 +306,9 @@ The curator runs in four steps:
 
 | Command | What it does |
 |---|---|
+| `wife import` | seed from your existing CLAUDE.md / AGENTS.md — `--dry-run` |
+| `wife review` | decide what stays: waiting candidates and dormant facts |
+| `wife spread` | facts showing up in more than one repo |
 | `wife remember "<fact>"` | store it now — `--project`, `--section X` |
 | `wife forget "<text>"` | remove it entirely |
 | `wife pin "<text>"` | exempt from decay and eviction |
@@ -336,6 +380,7 @@ Add your own with `wife config denyPatterns '["client-name","internal-codename"]
       project.index.json
       meta.json
   sessions/              prompt buffers, deleted once curated
+  cross-project.json     which facts have shown up in more than one repo
   journal.jsonl          append-only audit log
   config.json
 ```
@@ -355,6 +400,8 @@ wife config promotionThreshold 3         # be even more sceptical
 wife config halfLife.project 30          # project facts go stale faster
 wife config denyPatterns '["acme-corp"]' # never store anything matching this
 wife config capture false                # pause learning, keep injecting
+wife config dormancy.identity 180        # be slower to let go of who you are
+wife config crossProjectThreshold 2      # promote to identity sooner
 ```
 
 ---
@@ -376,6 +423,12 @@ No. Extraction is pattern matching, not a model call.
 **What if it misses something important?**
 `wife remember "<fact>"` stores it immediately at full confidence. Saying `remember that…` or `always…` in a normal prompt does the same thing.
 
+**What happens to something that stops being true?**
+Three ways out. Contradict it and the old fact is replaced immediately, with the
+change recorded. Say nothing for long enough and it goes dormant — out of the
+context, still in the file, revived the moment you mention it again. Or delete
+the line yourself. Nothing silently rots.
+
 **Can I use it on several machines?**
 Yes — `~/.wife` is a plain folder. `git init` it and push it to a private repo, or drop it in your dotfiles.
 
@@ -396,7 +449,7 @@ Spanish and English out of the box, and it writes each fact back in the language
 npm run check
 ```
 
-**90 unit tests** plus a **77-check end-to-end run** that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
+**127 unit tests** plus a **77-check end-to-end run** that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
 
 - a credential pasted into a prompt never appears anywhere under `~/.wife`
 - a task ("fix the login bug") never becomes a memory
@@ -407,6 +460,10 @@ npm run check
 - a corrupt index file is quarantined and recovered from instead of crashing
 - a buffer from a session that never ended is picked up at the next start
 - the CLI works through the symlink `npm link` installs, not just as a direct file
+- a credential inside an imported CLAUDE.md is dropped, underscores and all
+- a fact gone quiet for months stops being injected but stays in the file
+- saying a dormant fact again revives it, back to its original section
+- one repo repeating itself never triggers cross-project promotion; three do
 
 CI runs the whole suite on Linux, macOS and Windows across Node 18, 20 and 22.
 

@@ -25,6 +25,22 @@ export const DEFAULT_CONFIG = {
     project: 45,
   },
 
+  /**
+   * Go quiet about a fact for this many days and it goes dormant: out of the
+   * injected context, still in the file, revived the moment you say it again.
+   * Facts you stated deliberately get twice this window. Pinned facts are exempt.
+   */
+  dormancy: {
+    identity: 120,
+    project: 60,
+  },
+
+  /**
+   * Say the same thing in this many different repos and it is clearly about you,
+   * not about any one of them, so it gets promoted to identity automatically.
+   */
+  crossProjectThreshold: 3,
+
   /** Prompts longer than this are still stored for review but never mined for facts. */
   maxPromptChars: 4000,
 

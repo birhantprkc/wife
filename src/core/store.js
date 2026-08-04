@@ -5,6 +5,16 @@ import { record } from './journal.js';
 const DAY_MS = 86_400_000;
 
 /**
+ * Reserved section name. Facts here are not injected into the agent, but stay
+ * visible in the file so you can see what was set aside and why.
+ *
+ * Making it a section rather than a hidden flag keeps the markdown authoritative:
+ * drag a line into `## Dormant` by hand and it stops being injected; drag it out
+ * and it comes back. No command needed either way.
+ */
+export const DORMANT = 'Dormant';
+
+/**
  * A Store is one markdown file plus a metadata sidecar.
  *
  * The markdown file is the source of truth for *what* is remembered. You can
@@ -72,9 +82,12 @@ export class Store {
       order.push(id);
       const existing = this.index.facts[id];
       if (existing) {
-        // Keep metadata, but the section shown in the file wins.
+        // Keep metadata, but the section shown in the file wins — including a
+        // hand-edited move into or out of Dormant.
         if (existing.section !== section) {
+          if (section === DORMANT && existing.section !== DORMANT) existing.homeSection = existing.section;
           existing.section = section;
+          existing.dormant = section === DORMANT;
           this.dirty = true;
         }
         if (existing.text !== text) {
@@ -93,6 +106,7 @@ export class Store {
           first: now,
           last: now,
           pinned: false,
+          dormant: section === DORMANT,
           evidence: null,
         };
         this.dirty = true;
@@ -118,6 +132,15 @@ export class Store {
       if (!ids.includes(id)) ids.push(id);
     }
     return ids.map((id) => ({ id, ...this.index.facts[id] }));
+  }
+
+  /** Facts that are actually injected. Dormant ones are excluded. */
+  activeFacts() {
+    return this.facts().filter((f) => !f.dormant);
+  }
+
+  dormantFacts() {
+    return this.facts().filter((f) => f.dormant);
   }
 
   get(id) {
@@ -167,6 +190,14 @@ export class Store {
 
     const existing = this.index.facts[id];
     if (existing) {
+      const revived = existing.dormant;
+      if (revived) {
+        // You said it again, so it is current again. Back to where it lived before.
+        existing.dormant = false;
+        existing.section = existing.homeSection || section || this.configuredSections[0];
+        delete existing.homeSection;
+        record({ event: 'revived', scope: this.scope, id, text: clean, reason: 'stated again after going dormant' });
+      }
       existing.seen = (existing.seen || 1) + 1;
       existing.last = now;
       existing.confidence = Math.min(0.99, (existing.confidence || confidence) + 0.05);
@@ -174,7 +205,7 @@ export class Store {
       if (existing.sessions.length > 20) existing.sessions = existing.sessions.slice(-20);
       this.dirty = true;
       record({ event: 'reinforced', scope: this.scope, id, text: clean, seen: existing.seen });
-      return { action: 'reinforced', id };
+      return { action: revived ? 'revived' : 'reinforced', id };
     }
 
     // Does this replace something already on file?
@@ -320,8 +351,47 @@ export class Store {
     return removed;
   }
 
+  /** Token cost of what actually gets injected. Dormant facts cost nothing. */
   tokens() {
-    return estimateTokens(this.facts().map((f) => `- ${f.text}`).join('\n'));
+    return estimateTokens(this.activeFacts().map((f) => `- ${f.text}`).join('\n'));
+  }
+
+  /**
+   * Retire facts you have stopped mentioning.
+   *
+   * This is the answer to "what happens to something that quietly stops being
+   * true?" Contradicting a fact replaces it immediately, and deleting the line
+   * forgets it. But a criterion you simply drifted away from used to sit there
+   * forever, losing score without anything ever acting on it — decay only bit
+   * when the budget filled up, and on a small memory it never did.
+   *
+   * Now silence is enough. Past the window, a fact goes dormant: out of the
+   * injected context, still visible in the file. Say it again and it comes back.
+   *
+   * Pinned facts never go dormant — that is what pinning is for. Facts you
+   * stated deliberately get twice the window, because you meant them once.
+   */
+  goDormant(windowDays, now = Date.now()) {
+    const moved = [];
+    for (const fact of this.activeFacts()) {
+      if (fact.pinned) continue;
+      const deliberate = fact.source === 'manual' || fact.source === 'explicit' || fact.source === 'import';
+      const window = deliberate ? windowDays * 2 : windowDays;
+      const days = (now - Date.parse(fact.last || fact.first || 0)) / DAY_MS;
+      if (days <= window) continue;
+
+      const entry = this.index.facts[fact.id];
+      entry.homeSection = entry.section;
+      entry.section = DORMANT;
+      entry.dormant = true;
+      this.dirty = true;
+      moved.push({ ...fact, days: Math.round(days) });
+      record({
+        event: 'dormant', scope: this.scope, id: fact.id, text: fact.text,
+        reason: `not mentioned in ${Math.round(days)} days`,
+      });
+    }
+    return moved;
   }
 
   /** Evict the lowest-scoring facts until the store fits in `budget` tokens. */
@@ -329,7 +399,7 @@ export class Store {
     const evicted = [];
     let guard = 0;
     while (this.tokens() > budget && guard++ < 500) {
-      const candidates = this.facts()
+      const candidates = this.activeFacts()
         .filter((f) => !f.pinned)
         .sort((a, b) => this.score(a) - this.score(b));
       if (!candidates.length) break;
@@ -350,8 +420,10 @@ export class Store {
   /** Section order: configured sections first, then any extra sections found in the file. */
   sectionNames() {
     const used = new Set(this.facts().map((f) => f.section).filter(Boolean));
+    used.delete(DORMANT);
     const ordered = this.configuredSections.filter((s) => used.has(s));
     for (const s of used) if (!ordered.includes(s)) ordered.push(s);
+    if (this.dormantFacts().length) ordered.push(DORMANT); // always last
     return ordered;
   }
 
@@ -369,6 +441,10 @@ export class Store {
       if (!items.length) continue;
       items.sort((a, b) => Number(b.pinned) - Number(a.pinned));
       lines.push(`## ${section}`);
+      if (section === DORMANT) {
+        lines.push('_Not mentioned in a long time, so these are no longer sent to the agent._');
+        lines.push('_Say one again and it comes back. Delete the line to forget it for good._');
+      }
       for (const f of items) lines.push(`- ${f.text}`);
       lines.push('');
     }

@@ -43,7 +43,8 @@ export function cmdShow(args) {
 }
 
 function renderStore(title, store, budget, args) {
-  const facts = store.facts();
+  const facts = store.activeFacts();
+  const dormant = store.dormantFacts();
   heading(`${title} ${c.gray(`(${facts.length} fact${facts.length === 1 ? '' : 's'})`)}`);
   if (!facts.length) {
     say(c.gray('  empty'));
@@ -62,6 +63,9 @@ function renderStore(title, store, budget, args) {
     }
   }
   say(`  ${meter(store.tokens(), budget)}`);
+  if (dormant.length) {
+    say(c.gray(`  ${plural(dormant.length, 'fact')} dormant — not sent to the agent (\`wife review\` to act)`));
+  }
 
   const pending = store.pending();
   if (pending.length && args.verbose) {
@@ -83,8 +87,8 @@ export function cmdStatus() {
 
   heading('wife');
   say(`  memory      ${homeRelative(paths.home())}`);
-  say(`  identity    ${plural(identity.facts().length, 'fact')} · ${identity.tokens()}/${config.budget.identity} tokens`);
-  say(`  project     ${project.name} · ${plural(project.store.facts().length, 'fact')} · ${project.store.tokens()}/${config.budget.project} tokens`);
+  say(`  identity    ${plural(identity.activeFacts().length, 'fact')} · ${identity.tokens()}/${config.budget.identity} tokens`);
+  say(`  project     ${project.name} · ${plural(project.store.activeFacts().length, 'fact')} · ${project.store.tokens()}/${config.budget.project} tokens`);
   say(`  root        ${homeRelative(project.root)}`);
 
   heading('Agents');

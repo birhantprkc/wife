@@ -31,7 +31,11 @@ Where things live:
   facts, plus the rejection filters. Most feature requests land here.
 - `src/core/store.js` — markdown file plus metadata sidecar, scoring, pruning.
   Hand edits to the markdown always win over the sidecar.
-- `src/core/harvest.js` — the curator: extract, gate, reconcile, prune.
+- `src/core/harvest.js` — the curator: extract, gate, reconcile, retire, prune.
+- `src/core/import.js` — seeding from existing CLAUDE.md / AGENTS.md. Screens for
+  credentials BEFORE any text cleanup; reversing that order once let a token
+  through, because stripping markdown emphasis also ate the underscore.
+- `src/core/crossproject.js` — the only state that spans repos.
 - `src/agents/` — one file per agent integration.
 - `src/commands/hooks.js` — code that runs inside a hook. It must never exit
   non-zero and must never print anything unexpected to stdout.
@@ -42,3 +46,4 @@ Where things live:
 - Never let a credential reach disk. `src/core/redact.js` screens every
   candidate; a match drops the whole candidate rather than masking it.
 - Never remove the token ceiling. It is the reason the memory stays trustworthy.
+- Never let import read Wife's own managed block. That is a feedback loop.

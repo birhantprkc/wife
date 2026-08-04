@@ -66,7 +66,7 @@ export function compileContext({ cwd = process.cwd(), config = loadConfig(), inc
  * belt-and-braces pass for hand-edited files that grew past it.
  */
 function withinBudget(store, budget) {
-  const all = store.facts();
+  const all = store.activeFacts();
   if (!all.length) return [];
   const ranked = [...all].sort((a, b) => store.score(b) - store.score(a));
   const keep = [];
