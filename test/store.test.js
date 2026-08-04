@@ -39,11 +39,11 @@ describe('markdown parsing', () => {
   test('reads bullets under headings and ignores prose', () => {
     const parsed = parseMarkdown([
       '# Title', '', 'Some prose that is not a fact.', '',
-      '## Who', '- Lives in Lima', '- Builds AI products', '',
+      '## Who', '- Lives in Berlin', '- Builds AI products', '',
       '## Preferences', '- Prefers short answers', '',
     ].join('\n'));
     assert.equal(parsed.length, 3);
-    assert.deepEqual(parsed[0], { section: 'Who', text: 'Lives in Lima' });
+    assert.deepEqual(parsed[0], { section: 'Who', text: 'Lives in Berlin' });
     assert.equal(parsed[2].section, 'Preferences');
   });
 
@@ -68,14 +68,14 @@ describe('hand editing is first-class', () => {
   test('a line deleted by hand is forgotten, with no command needed', () => {
     const store = newStore();
     store.upsert({ text: 'Prefers short answers', section: 'Preferences' });
-    store.upsert({ text: 'Lives in Lima', section: 'Who' });
+    store.upsert({ text: 'Lives in Berlin', section: 'Who' });
     store.save();
     assert.equal(newStore().facts().length, 2);
 
-    fs.writeFileSync(path.join(sandbox, 'identity.md'), '# t\n\n## Who\n- Lives in Lima\n');
+    fs.writeFileSync(path.join(sandbox, 'identity.md'), '# t\n\n## Who\n- Lives in Berlin\n');
     const after = newStore();
     assert.equal(after.facts().length, 1);
-    assert.equal(after.facts()[0].text, 'Lives in Lima');
+    assert.equal(after.facts()[0].text, 'Lives in Berlin');
   });
 
   test('metadata survives a hand edit that only moves a line', () => {
@@ -122,7 +122,7 @@ describe('reconciliation', () => {
 
   test('unrelated facts coexist', () => {
     const store = newStore();
-    store.upsert({ text: 'Lives in Lima Peru', section: 'Who' });
+    store.upsert({ text: 'Lives in Berlin Germany', section: 'Who' });
     store.upsert({ text: 'Prefers short answers', section: 'Preferences' });
     assert.equal(store.facts().length, 2);
   });

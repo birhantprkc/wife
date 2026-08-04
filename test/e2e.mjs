@@ -202,9 +202,9 @@ check('journal records the removal', /forgotten/i.test(r.out), r.out);
 section('hand editing wins');
 
 fs.writeFileSync(path.join(home, 'identity.md'),
-  '# Wife · who you are\n\n## Who\n- Lives in Lima and works in Spanish\n');
+  '# Wife · who you are\n\n## Who\n- Lives in Berlin and works in German\n');
 r = wife(['show']);
-check('adopts a hand-written line', /Lives in Lima/.test(r.out), r.out);
+check('adopts a hand-written line', /Lives in Berlin/.test(r.out), r.out);
 check('forgets everything the user deleted by hand', !/respuestas cortas/i.test(r.out));
 
 // ---------------------------------------------------------------------------

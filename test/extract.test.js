@@ -27,7 +27,7 @@ describe('secret screening', () => {
       'I prefer short answers',
       'we use Postgres in this project',
       'always run the tests before committing',
-      'my name is Roberto and I live in Lima',
+      'my name is Sam and I live in Berlin',
     ]) {
       assert.equal(detectSecret(clean), null, `false positive on: ${clean}`);
     }
@@ -65,7 +65,7 @@ describe('candidate judging', () => {
   });
 
   test('accepts genuine facts', () => {
-    for (const good of ['prefiere respuestas cortas y directas', 'this project uses Postgres and Deno', 'Based in Lima Peru']) {
+    for (const good of ['prefiere respuestas cortas y directas', 'this project uses Postgres and Deno', 'Based in Berlin']) {
       assert.equal(judge(good).ok, true, `should have accepted: ${good}`);
     }
   });
@@ -108,7 +108,7 @@ describe('extraction — Spanish', () => {
   });
 
   test('identity statement is scoped to the user', () => {
-    const { candidates } = extract('me llamo Roberto y vivo en Lima');
+    const { candidates } = extract('me llamo Ana y vivo en Valencia');
     assert.ok(candidates.length >= 1);
     assert.equal(candidates[0].scope, 'user');
   });
@@ -189,7 +189,7 @@ describe('extraction — what it refuses to learn', () => {
 describe('text utilities', () => {
   test('factId ignores case, accents and punctuation', () => {
     assert.equal(factId('Prefiere respuestas cortas.'), factId('prefiere respuestas cortas'));
-    assert.equal(factId('Está en Lima'), factId('esta en lima'));
+    assert.equal(factId('Está en Múnich'), factId('esta en munich'));
   });
 
   test('factId separates genuinely different facts', () => {
@@ -198,7 +198,7 @@ describe('text utilities', () => {
 
   test('similarity finds restatements', () => {
     assert.ok(similarity('prefers short direct answers', 'prefers short and direct answers') > 0.7);
-    assert.ok(similarity('uses Postgres', 'lives in Lima') < 0.2);
+    assert.ok(similarity('uses Postgres', 'lives in Berlin') < 0.2);
   });
 
   test('contradiction detection catches a flipped statement', () => {
