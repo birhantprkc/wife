@@ -137,6 +137,89 @@ fact is promoted into identity automatically, where it follows you everywhere.
 
 `wife spread` shows what's on its way there.
 
+### It follows you between machines
+
+Push your memory folder to a private repo and it works — right up to the day you
+use two machines in the same week. Then git hands you a text conflict in a file
+full of facts and asks you to pick a side, and every side loses something.
+
+```bash
+wife sync setup git@github.com:you/wife-memory.git   # once, per machine
+wife sync                                            # commit, merge, push
+wife clone git@github.com:you/wife-memory.git        # set up a new machine
+```
+
+Facts are content-addressed and carry their own provenance, so they merge by
+**meaning** rather than by line:
+
+| Situation | What happens |
+|---|---|
+| Same fact on both machines | sessions are unioned, latest sighting wins |
+| Only on one, and it was in the ancestor | the other machine deleted it — **deletion wins** |
+| Only on one, and it is new | kept |
+| Contradiction across machines | the newer statement wins, the old one is dropped |
+| Candidate waiting on both | sessions merge — **the two-session gate now spans machines** |
+
+That last row is the quiet win: say something once on the laptop and once on the
+desktop, and it is finally enough to be remembered.
+
+None of this is limited to two machines. Seven laptops converge as cleanly as
+two. And `sessions/` is git-ignored, so raw prompts never leave the machine they
+were typed on.
+
+### It enforces what can be enforced
+
+Injected text is a suggestion. The agent almost always follows it. Almost is not
+a guarantee — and for some rules that gap matters.
+
+```bash
+wife harden
+```
+
+Wife ships with **no rules of its own**. A fresh install has an empty memory and
+zero guards; everything below comes from things you said. `wife harden` scans
+*your* rules for the ones an agent hook can actually enforce, shows you each one,
+and turns on only what you approve.
+
+If you happened to have written these, here is what it would offer:
+
+| A rule of yours | What the guard would do |
+|---|---|
+| `Never commit directly to main` | block `git commit` **while you are on main**, allow it on a feature branch |
+| `Never force push` | block `--force`, still allow `--force-with-lease` |
+| `Don't use npm, use pnpm` | block `npm install`, leave pnpm alone |
+| `Never rm -rf` | block recursive deletes, allow deleting one file |
+| `Don't touch .env` | block edits to `.env`, not to `environment.ts` |
+
+Those shapes — git, package managers, deletes, protected files — are the ones
+recognised automatically because they are what people repeat most. They are not
+everybody's list, so any rule can be enforced directly:
+
+```bash
+wife guards --add "Never terraform apply against prod" --blocks "terraform apply"
+wife guards --add "Don't touch prod config" --blocks "config/prod" --tool Edit
+wife guards --add "No commits on release" --blocks "git commit" --on-branch release
+
+wife guards --test "terraform apply -auto-approve"   # see what would happen
+```
+
+The rule stays in memory too, and that is deliberate: **the guard stops the
+action, the memory stops the attempt.** Without the memory the agent tries the
+forbidden thing and eats the block every round — deterministic, and a wasted
+turn each time.
+
+Three constraints this is built under. Nothing is ever enforced without you
+approving it one rule at a time, because a guard invented from a sentence you
+never meant as a hard rule blocks work you asked for. A description is never a
+guard: `Uses pnpm` states a preference and blocks nothing, only `Never use npm`
+does. And guards fail open — a broken pattern allows the call, because a bug
+that blocks every command is far worse than a rule that missed once.
+
+Most of what Wife knows maps to no tool call at all — tone, language, what you
+prefer to see first — so it stays as context by design. `PreToolUse` is only
+registered once you have a guard, so with none there is no hook in the path of
+your work.
+
 ### It only reads what you wrote
 
 Your agent's replies are **never** mined. When a model suggests "let's use Postgres" and you answer "ok", it has not learned a fact about you — it has heard its own idea repeated back. Wife reads your prompts and nothing else.
@@ -309,6 +392,8 @@ The curator runs in four steps:
 | `wife import` | seed from your existing CLAUDE.md / AGENTS.md — `--dry-run` |
 | `wife review` | decide what stays: waiting candidates and dormant facts |
 | `wife spread` | facts showing up in more than one repo |
+| `wife harden` | turn rules a hook can enforce into real guards |
+| `wife guards` | what is enforced — `--add … --blocks …`, `--test …`, `--off …` |
 | `wife remember "<fact>"` | store it now — `--project`, `--section X` |
 | `wife forget "<text>"` | remove it entirely |
 | `wife pin "<text>"` | exempt from decay and eviction |
@@ -333,7 +418,11 @@ The curator runs in four steps:
 | `wife init` | create `~/.wife` and attach whatever is installed |
 | `wife attach claude\|codex` | wire Wife in — `--project` for repo-local |
 | `wife detach claude\|codex` | remove it cleanly |
-| `wife sync` | refresh Wife's block in `AGENTS.md` |
+| `wife sync setup <url>` | wire `~/.wife` up to a private git repo |
+| `wife sync` | commit, merge the other machines in, push |
+| `wife sync status` | how far this machine has drifted |
+| `wife clone <url>` | set up a new machine from your memory repo |
+| `wife sync-codex` | refresh Wife's block in `AGENTS.md` |
 
 ### Lifecycle
 
@@ -423,6 +512,12 @@ No. Extraction is pattern matching, not a model call.
 **What if it misses something important?**
 `wife remember "<fact>"` stores it immediately at full confidence. Saying `remember that…` or `always…` in a normal prompt does the same thing.
 
+**Isn't a rule in a prompt just a suggestion?**
+For some rules, yes, and that is a fair criticism. `wife harden` finds the ones a
+hook can enforce and turns them into `PreToolUse` guards you approve one by one.
+The rest — tone, language, preferences — correspond to no tool call, so a hook
+cannot express them either way.
+
 **What happens to something that stops being true?**
 Three ways out. Contradict it and the old fact is replaced immediately, with the
 change recorded. Say nothing for long enough and it goes dormant — out of the
@@ -430,7 +525,10 @@ context, still in the file, revived the moment you mention it again. Or delete
 the line yourself. Nothing silently rots.
 
 **Can I use it on several machines?**
-Yes — `~/.wife` is a plain folder. `git init` it and push it to a private repo, or drop it in your dotfiles.
+Yes, and properly. `wife sync setup <private-repo-url>` on each machine, then
+`wife sync`. Memory merges by meaning rather than by line, so two machines that
+both learned things in the same week end up with everything, not with one of
+them winning. There is no two-machine limit.
 
 **Does it work with both Claude Code and Codex at the same time?**
 Yes. Both read the same memory, so a fact learned in one shows up in the other.
@@ -449,7 +547,8 @@ Spanish and English out of the box, and it writes each fact back in the language
 npm run check
 ```
 
-**127 unit tests** plus a **77-check end-to-end run** that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
+**173 unit tests**, a **77-check end-to-end run**, and a **38-check multi-machine
+convergence run** using real git that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
 
 - a credential pasted into a prompt never appears anywhere under `~/.wife`
 - a task ("fix the login bug") never becomes a memory
@@ -464,6 +563,14 @@ npm run check
 - a fact gone quiet for months stops being injected but stays in the file
 - saying a dormant fact again revives it, back to its original section
 - one repo repeating itself never triggers cross-project promotion; three do
+- three machines diverging in parallel converge to an identical set of facts
+- a fact deleted on one machine stays deleted on the others after a sync
+- a candidate seen once on each of two machines is promoted, exactly as it would
+  be within one
+- a description ("Uses pnpm", "Deploys on Thursdays") never becomes a blocking guard
+- a commit guard blocks on main and allows the identical command on a feature branch
+- a malformed guard pattern allows the call instead of throwing
+- `PreToolUse` is not registered at all until a guard exists
 
 CI runs the whole suite on Linux, macOS and Windows across Node 18, 20 and 22.
 

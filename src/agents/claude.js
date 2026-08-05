@@ -2,6 +2,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeHome } from '../util/paths.js';
 import { readJSON, writeJSON, exists, ensureDir } from '../util/fsx.js';
+import { activeGuards } from '../core/guards.js';
+
+const hasGuards = () => { try { return activeGuards().length > 0; } catch { return false; } };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BIN = path.resolve(HERE, '..', '..', 'bin', 'wife.js');
@@ -19,11 +22,19 @@ export const BIN = path.resolve(HERE, '..', '..', 'bin', 'wife.js');
  */
 export function wifeHooks(nodeBin = process.execPath) {
   const handler = (args, extra = {}) => ({ type: 'command', command: nodeBin, args: [BIN, ...args], ...extra });
-  return {
+  const hooks = {
     SessionStart: [{ hooks: [handler(['inject', '--agent', 'claude'], { timeout: 15, statusMessage: 'Loading wife memory' })] }],
     UserPromptSubmit: [{ hooks: [handler(['capture', '--agent', 'claude'], { timeout: 10 })] }],
     SessionEnd: [{ hooks: [handler(['harvest', '--stdin'], { timeout: 20 })] }],
   };
+
+  // PreToolUse is only registered once there is something to enforce. Adding a
+  // hook that runs on every tool call and never blocks anything is pure latency,
+  // and it puts wife in the path of work it has no business touching.
+  if (hasGuards()) {
+    hooks.PreToolUse = [{ matcher: 'Bash|Edit|Write|NotebookEdit', hooks: [handler(['guard'], { timeout: 8 })] }];
+  }
+  return hooks;
 }
 
 export function isWifeHandler(handler) {

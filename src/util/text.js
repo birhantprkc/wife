@@ -30,14 +30,53 @@ const STOPWORDS = new Set([
   // es
   'el','la','los','las','un','una','unos','unas','de','del','al','a','en','y','o','que','se','es','son',
   'con','por','para','su','sus','lo','le','me','mi','mis','te','tu','tus','como','mas','pero','este',
-  'esta','estos','estas','ese','esa','muy','ya','sin','sobre','hay','ser','estar','tiene','tener','usa','usar',
+  'esta','estos','estas','ese','esa','muy','ya','sin','sobre','hay','ser','estar',
+  // Verbs are NOT stopwords here. They were, and it quietly gutted the
+  // contradiction check: "usa" was stripped before the lemma table could map
+  // it, so "Usa Redis" and "nunca uso Redis" ended up sharing nothing.
   // en
   'the','a','an','of','to','in','on','for','and','or','that','this','these','those','is','are','be','been',
-  'with','by','it','its','as','at','from','my','your','i','we','you','use','uses','using','do','does','not',
+  'with','by','it','its','as','at','from','my','your','i','we','you','do','does','not',
 ]);
 
+/**
+ * Conjugated forms of the verbs that actually carry meaning in a memory file,
+ * mapped to one lemma each.
+ *
+ * Without this, "Usa Redis" and "nunca uso Redis" share no verb token at all,
+ * so the contradiction check never fired and both statements sat in the file
+ * disagreeing with each other. A general stemmer would catch more and also
+ * collide unrelated words (casa/caso); a short explicit table catches the cases
+ * that occur and cannot invent a match.
+ */
+const LEMMA = new Map();
+for (const [lemma, forms] of [
+  ['usar', 'uso usas usa usamos usais usan usar usando usado usada usados utilizo utilizas utiliza utilizamos utilizan utilizar utilizando'],
+  ['preferir', 'prefiero prefieres prefiere preferimos prefieren preferir prefiriendo'],
+  ['trabajar', 'trabajo trabajas trabaja trabajamos trabajan trabajar trabajando'],
+  ['hacer', 'hago haces hace hacemos hacen hacer haciendo'],
+  ['escribir', 'escribo escribes escribe escribimos escriben escribir escribiendo'],
+  ['ejecutar', 'ejecuto ejecutas ejecuta ejecutamos ejecutan ejecutar corro corre corremos corren correr'],
+  ['evitar', 'evito evitas evita evitamos evitan evitar evitando'],
+  ['querer', 'quiero quieres quiere queremos quieren querer'],
+  ['responder', 'respondo respondes responde respondemos responden responder respondiendo respuesta respuestas'],
+  ['desplegar', 'despliego despliega desplegamos despliegan desplegar deploy deploys'],
+  ['use', 'use uses using used'],
+  ['prefer', 'prefer prefers preferring preferred'],
+  ['write', 'write writes writing wrote written'],
+  ['run', 'run runs running ran'],
+  ['avoid', 'avoid avoids avoiding avoided'],
+  ['answer', 'answer answers answering answered reply replies replying'],
+  ['deploy', 'deploy deploys deploying deployed'],
+]) {
+  for (const form of forms.split(' ')) LEMMA.set(form, lemma);
+}
+
 export function tokensOf(text) {
-  return normalize(text).split(' ').filter((w) => w.length > 1 && !STOPWORDS.has(w));
+  return normalize(text)
+    .split(' ')
+    .filter((w) => w.length > 1 && !STOPWORDS.has(w))
+    .map((w) => LEMMA.get(w) || w);
 }
 
 /** Jaccard similarity over content words. Cheap near-duplicate detection, no embeddings. */
@@ -81,10 +120,22 @@ const NEGATIONS = new Set(['no', 'not', 'never', 'nunca', 'jamas', 'sin', 'dont'
  * content words, but exactly one of them carries a negation.
  */
 export function contradicts(a, b) {
-  const stripNeg = (t) => normalize(t).split(' ').filter((w) => !NEGATIONS.has(w)).join(' ');
   const hasNeg = (t) => normalize(t).split(' ').some((w) => NEGATIONS.has(w));
   if (hasNeg(a) === hasNeg(b)) return false;
-  return similarity(stripNeg(a), stripNeg(b)) >= 0.8;
+
+  // Compare by containment, not by a similarity threshold. "Nunca uso Redis"
+  // and "Usa Redis para la caché" are a plain contradiction, but the second
+  // carries extra detail, so their overlap scores well under any threshold
+  // loose enough to be safe. Asking instead whether one statement's content
+  // words all appear in the other catches the asymmetry and still refuses to
+  // fire on "Usa Postgres" vs "Nunca usa MySQL", where each has a word the
+  // other lacks.
+  const strip = (t) => new Set(tokensOf(t).filter((w) => !NEGATIONS.has(w)));
+  const A = strip(a);
+  const B = strip(b);
+  if (A.size < 2 || B.size < 2) return false;
+  const subset = (X, Y) => [...X].every((w) => Y.has(w));
+  return subset(A, B) || subset(B, A);
 }
 
 export function titleCase(text) {

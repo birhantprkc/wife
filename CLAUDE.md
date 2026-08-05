@@ -36,6 +36,14 @@ Where things live:
   credentials BEFORE any text cleanup; reversing that order once let a token
   through, because stripping markdown emphasis also ate the underscore.
 - `src/core/crossproject.js` — the only state that spans repos.
+- `src/core/guards.js` — rules that a PreToolUse hook can enforce. Guards must
+  FAIL OPEN and must never be created without the user approving each one. A
+  description ("Uses pnpm") is not a prohibition and must never become a guard.
+- `src/core/merge.js` + `src/commands/gitsync.js` — multi-machine sync. Two traps
+  live here: `merge=ours` is NOT a git built-in and must be defined as a driver
+  or every sync dies on a markdown conflict; and markdown must be DELETED before
+  regenerating from a merged index, or Store.load re-adopts facts the other
+  machine deliberately deleted.
 - `src/agents/` — one file per agent integration.
 - `src/commands/hooks.js` — code that runs inside a hook. It must never exit
   non-zero and must never print anything unexpected to stdout.
