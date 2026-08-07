@@ -18,8 +18,10 @@
   <img src="https://img.shields.io/badge/license-MIT-8fbf6a?style=for-the-badge" alt="license MIT" />
   <img src="https://img.shields.io/badge/dependencies-0-2ea043?style=for-the-badge" alt="zero dependencies" />
   <img src="https://img.shields.io/badge/local--first-no%20cloud-ff6b8a?style=for-the-badge" alt="local first" />
-  <img src="https://img.shields.io/badge/Claude%20Code-supported-f5a623?style=for-the-badge" alt="Claude Code supported" />
-  <img src="https://img.shields.io/badge/Codex-supported-444444?style=for-the-badge" alt="Codex supported" />
+  <img src="https://img.shields.io/badge/Claude%20Code-full-f5a623?style=for-the-badge" alt="Claude Code" />
+  <img src="https://img.shields.io/badge/Codex-full-444444?style=for-the-badge" alt="Codex" />
+  <img src="https://img.shields.io/badge/Cursor-full-0098FF?style=for-the-badge" alt="Cursor" />
+  <img src="https://img.shields.io/badge/Gemini%20CLI-injection%20only-8E75B2?style=for-the-badge" alt="Gemini CLI" />
   <img src="https://img.shields.io/badge/node-%E2%89%A518.17-6f42c1?style=for-the-badge" alt="node 18.17+" />
 </p>
 
@@ -343,6 +345,46 @@ rm -rf ~/.wife        # only if you also want the memory gone
 
 ---
 
+## Which agents, and how far
+
+Not every agent exposes the same lifecycle, so this is exactly what each one does.
+
+| | Injects memory | Learns from your sessions | Enforces guards |
+|---|---|---|---|
+| **Claude Code** | `SessionStart` | `UserPromptSubmit` + `SessionEnd` | `PreToolUse` |
+| **Codex** | `SessionStart` | `UserPromptSubmit` + `Stop` | `PreToolUse` |
+| **Cursor** | rules file, rewritten at `stop` | `beforeSubmitPrompt` + `stop` | `beforeShellExecution` |
+| **Gemini CLI** | `GEMINI.md` | **no** | **no** |
+
+```bash
+wife attach claude
+wife attach codex
+wife attach cursor
+wife attach gemini
+```
+
+All four read the same memory, so a fact learned in Claude Code shows up in Codex.
+
+**Codex** needs hooks, which went stable in v0.124.0. `wife attach codex` also
+enables `[features] codex_hooks` for older builds and writes an `AGENTS.md`
+block as a fallback for versions predating the hook engine entirely.
+
+**Cursor** has no session-start event whose output becomes context, so memory is
+injected through an always-applied rule at `.cursor/rules/wife-memory.mdc`,
+rewritten by the `stop` hook at the end of every session. The loop still closes;
+it is just one session behind on facts learned minutes ago.
+
+**Gemini CLI** gets injection only. Its hook engine exists, but wiring to an
+event name this integration cannot verify would fail silently — the worst
+outcome for a memory tool — so `GEMINI.md` it is. Refresh with `wife sync-gemini`,
+or let a Claude Code or Codex session on the same machine keep the store current.
+
+Blocking works differently in each: Claude Code takes a `permissionDecision`,
+Codex wants exit code 2, Cursor wants `{ permission: "deny" }`. Cursor also
+names things differently — `conversation_id` and `text` where the others send
+`session_id` and `prompt`. All of that is handled, and tested against each
+agent's documented payload.
+
 ## How it works
 
 Three hooks. No wrapper around your agent, so your workflow is untouched.
@@ -416,8 +458,9 @@ The curator runs in four steps:
 | Command | What it does |
 |---|---|
 | `wife init` | create `~/.wife` and attach whatever is installed |
-| `wife attach claude\|codex` | wire Wife in — `--project` for repo-local |
-| `wife detach claude\|codex` | remove it cleanly |
+| `wife attach <agent>` | `claude` · `codex` · `cursor` · `gemini` — `--project` |
+| `wife detach <agent>` | remove it cleanly |
+| `wife sync-gemini` | refresh the Gemini block |
 | `wife sync setup <url>` | wire `~/.wife` up to a private git repo |
 | `wife sync` | commit, merge the other machines in, push |
 | `wife sync status` | how far this machine has drifted |
@@ -547,7 +590,7 @@ Spanish and English out of the box, and it writes each fact back in the language
 npm run check
 ```
 
-**173 unit tests**, a **77-check end-to-end run**, and a **38-check multi-machine
+**179 unit tests**, a **77-check end-to-end run**, a **63-check multi-agent run**, and a **38-check multi-machine
 convergence run** using real git that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
 
 - a credential pasted into a prompt never appears anywhere under `~/.wife`
@@ -571,6 +614,13 @@ convergence run** using real git that spawns the real CLI and feeds it the exact
 - a commit guard blocks on main and allows the identical command on a feature branch
 - a malformed guard pattern allows the call instead of throwing
 - `PreToolUse` is not registered at all until a guard exists
+- Codex wires `Stop`, not `SessionEnd` — Codex has no such event, and a hook on
+  a name that does not exist never fires and never says so
+- Cursor's `conversation_id` / `text` payload is understood, and Cursor gets an
+  explicit `allow` rather than silence
+- a Codex guard denies with exit code 2, not with a JSON decision object
+- attaching to Codex three times leaves one `codex_hooks = true`, and the rest of
+  your `config.toml` untouched, blank lines included
 
 CI runs the whole suite on Linux, macOS and Windows across Node 18, 20 and 22.
 

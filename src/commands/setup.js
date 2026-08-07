@@ -2,7 +2,9 @@ import path from 'node:path';
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '../core/config.js';
 import { openIdentity, openProject, listProjects } from '../core/memory.js';
 import { attachClaude, detachClaude, claudeStatus, BIN } from '../agents/claude.js';
-import { attachCodex, detachCodex, codexStatus } from '../agents/codex.js';
+import { attachCodex, detachCodex, codexStatus, attachCodexBlock } from '../agents/codex.js';
+import { attachCursor, detachCursor, cursorStatus, cursorHome } from '../agents/cursor.js';
+import { attachGemini, detachGemini, geminiStatus, geminiHome } from '../agents/gemini.js';
 import { listSessions } from '../core/session.js';
 import { harvestPending } from '../core/harvest.js';
 import { paths, homeRelative, claudeHome, codexHome } from '../util/paths.js';
@@ -33,7 +35,15 @@ export function cmdInit(args) {
   }
   if (args.codex !== false && exists(codexHome())) {
     attachCodex();
-    ok('Attached to Codex (managed block in AGENTS.md)');
+    ok('Attached to Codex (SessionStart, UserPromptSubmit, Stop)');
+  }
+  if (args.cursor !== false && exists(cursorHome())) {
+    attachCursor({ project: true });
+    ok('Attached to Cursor (beforeSubmitPrompt, stop)');
+  }
+  if (args.gemini !== false && exists(geminiHome())) {
+    attachGemini();
+    ok('Attached to Gemini CLI (injection only — it does not learn from Gemini sessions)');
   }
 
   blank();
@@ -66,13 +76,46 @@ export function cmdAttach(args) {
 
   if (agent === 'codex') {
     const res = attachCodex({ project });
-    ok(`Codex block written to ${homeRelative(res.file)}`);
-    say(c.gray('Refresh it any time with: wife sync'));
-    say(c.gray('Only the region between the wife markers is touched.'));
+    ok(`Codex wired up in ${homeRelative(res.file)}`);
+    for (const e of res.events) {
+      bullet(e, {
+        SessionStart: 'loads your memory into the session',
+        UserPromptSubmit: 'buffers what you type',
+        Stop: 'curates the session into memory',
+        PreToolUse: 'enforces your guards',
+      }[e]);
+    }
+    if (res.flagged) say(c.gray('\nEnabled [features] codex_hooks in config.toml (needed on builds before v0.124).'));
+    say(c.gray(`Also wrote the AGENTS.md fallback at ${homeRelative(res.fallback)} for older builds.`));
+    say(c.gray('Open a new Codex session; /hooks will list them.'));
     return 0;
   }
 
-  fail('Usage: wife attach claude|codex [--project]');
+  if (agent === 'cursor') {
+    const res = attachCursor({ project: true });
+    ok(`Cursor wired up in ${homeRelative(res.file)}`);
+    for (const e of res.events) {
+      bullet(e, {
+        beforeSubmitPrompt: 'buffers what you type',
+        stop: 'curates the session and refreshes the rules file',
+        beforeShellExecution: 'enforces your guards',
+      }[e]);
+    }
+    say(c.gray(`\nMemory is injected through ${homeRelative(res.rules.file)}, rewritten at the end of each session.`));
+    say(c.gray('Cursor has no session-start hook that can add context, so it is one session behind on brand new facts.'));
+    return 0;
+  }
+
+  if (agent === 'gemini') {
+    const res = attachGemini({ project });
+    ok(`Gemini memory written to ${homeRelative(res.file)}`);
+    warn('Injection only: wife does not learn from Gemini sessions.');
+    say(c.gray('  Refresh it with `wife sync-gemini`, or let a Claude Code or Codex'));
+    say(c.gray('  session on this machine keep the memory current — they share one store.'));
+    return 0;
+  }
+
+  fail('Usage: wife attach claude|codex|cursor|gemini [--project]');
   return 1;
 }
 
@@ -87,23 +130,37 @@ export function cmdDetach(args) {
   }
   if (agent === 'codex') {
     const res = detachCodex({ project });
-    if (res.missing) warn(`No AGENTS.md at ${homeRelative(res.file)}`);
-    else if (!res.removed) warn('No wife block found; nothing to remove.');
+    ok(`Removed ${res.removed} wife hook(s) from ${homeRelative(res.file)} and the AGENTS.md block`);
+    return 0;
+  }
+  if (agent === 'cursor') {
+    const res = detachCursor({ project: true });
+    ok(`Removed ${res.removed} wife hook(s) from ${homeRelative(res.file)}${res.rulesRemoved ? ' and the rules file' : ''}`);
+    return 0;
+  }
+  if (agent === 'gemini') {
+    const res = detachGemini({ project });
+    if (res.missing || !res.removed) warn('No wife block found; nothing to remove.');
     else ok(`Removed wife block from ${homeRelative(res.file)}`);
     return 0;
   }
-  fail('Usage: wife detach claude|codex [--project]');
+  fail('Usage: wife detach claude|codex|cursor|gemini [--project]');
   return 1;
 }
 
 /** `wife sync` — regenerate anything wife writes into another tool's files. */
 export function cmdSync(args) {
+  if (args.gemini) {
+    const res = attachGemini({ project: Boolean(args.project) });
+    ok(`Refreshed ${homeRelative(res.file)}`);
+    return 0;
+  }
   const status = codexStatus({ project: Boolean(args.project) });
   if (!status.attached && !args.force) {
     info('Codex is not attached. Run: wife attach codex');
     return 0;
   }
-  const res = attachCodex({ project: Boolean(args.project) });
+  const res = attachCodexBlock({ project: Boolean(args.project) });
   ok(`Refreshed ${homeRelative(res.file)}`);
   return 0;
 }

@@ -19,7 +19,8 @@ afterEach(() => {
 });
 
 const { attachClaude, detachClaude, claudeStatus, isWifeHandler, wifeHooks } = await import('../src/agents/claude.js');
-const { attachCodex, detachCodex, codexStatus, upsertBlock, BEGIN, END } = await import('../src/agents/codex.js');
+const { attachCodex, detachCodex, codexStatus, upsertBlock, codexHooks, hooksPath,
+  isWifeHandler: isWifeCodexHandler, BEGIN, END } = await import('../src/agents/codex.js');
 const { refines, contradicts } = await import('../src/util/text.js');
 const { openIdentity } = await import('../src/core/memory.js');
 
@@ -127,12 +128,58 @@ describe('Claude Code wiring', () => {
 });
 
 describe('Codex wiring', () => {
-  test('creates a managed block in AGENTS.md', () => {
+  test('registers real lifecycle hooks, not just a text block', () => {
     const res = attachCodex();
-    const content = fs.readFileSync(res.file, 'utf8');
+    const hooks = JSON.parse(fs.readFileSync(res.file, 'utf8')).hooks;
+    assert.deepEqual(Object.keys(hooks).sort(), ['SessionStart', 'Stop', 'UserPromptSubmit'].sort());
+    assert.equal(codexStatus().attached, true);
+    assert.deepEqual(codexStatus().events.sort(), ['SessionStart', 'Stop', 'UserPromptSubmit'].sort());
+  });
+
+  test('the session ends on Stop, not SessionEnd', () => {
+    const hooks = codexHooks('/usr/bin/node');
+    assert.ok(hooks.Stop, 'Codex has no SessionEnd event; wiring one there would never fire');
+    assert.equal(Object.hasOwn(hooks, 'SessionEnd'), false);
+  });
+
+  test('SessionStart only fires on startup and resume, not on clear', () => {
+    assert.match(codexHooks('/usr/bin/node').SessionStart[0].matcher, /startup/);
+  });
+
+  test('still writes the AGENTS.md fallback for builds without hooks', () => {
+    const res = attachCodex();
+    const content = fs.readFileSync(res.fallback, 'utf8');
     assert.ok(content.includes(BEGIN));
     assert.ok(content.includes(END));
-    assert.equal(codexStatus().attached, true);
+  });
+
+  test('enables the codex_hooks feature flag for older builds', () => {
+    attachCodex();
+    const cfg = fs.readFileSync(path.join(sandbox, '.codex', 'config.toml'), 'utf8');
+    assert.match(cfg, /codex_hooks\s*=\s*true/);
+  });
+
+  test('attaching twice does not duplicate handlers', () => {
+    attachCodex();
+    attachCodex();
+    attachCodex();
+    const hooks = JSON.parse(fs.readFileSync(hooksPath(), 'utf8')).hooks;
+    const mine = Object.values(hooks).flat().flatMap((g) => g.hooks || []).filter(isWifeCodexHandler);
+    assert.equal(mine.length, 3, `expected 3 handlers, found ${mine.length}`);
+  });
+
+  test('leaves another tool\'s Codex hooks alone', () => {
+    const file = hooksPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo hi' }] }] },
+    }));
+    attachCodex();
+    const hooks = JSON.parse(fs.readFileSync(file, 'utf8')).hooks;
+    const all = hooks.SessionStart.flatMap((g) => g.hooks);
+    assert.ok(all.some((h) => h.command === 'echo hi'), 'destroyed another tool\'s hook');
+    assert.ok(all.some(isWifeCodexHandler));
   });
 
   test('never touches text outside its markers', () => {
@@ -152,7 +199,7 @@ describe('Codex wiring', () => {
     assert.ok(resynced.includes('# Mine'));
   });
 
-  test('detach leaves the user\'s own content behind', () => {
+  test('detach removes hooks and the block, leaving other content behind', () => {
     const file = path.join(sandbox, '.codex', 'AGENTS.md');
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '# House rules\n\nUse tabs.\n');

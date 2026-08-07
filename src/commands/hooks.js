@@ -15,14 +15,30 @@ import { safeId } from '../util/paths.js';
  *     UserPromptSubmit, stdout is fed straight into the model's context.
  */
 
+/**
+ * Read and normalise the hook payload.
+ *
+ * The three agents disagree on field names for the same things. Cursor sends
+ * `conversation_id` and `text`; Claude Code and Codex send `session_id` and
+ * `prompt`. Normalising here means every command downstream sees one shape,
+ * and a rename in one agent is a one-line fix rather than a hunt.
+ */
 async function hookInput() {
   const raw = await readStdin();
   if (!raw.trim()) return {};
+  let data;
   try {
-    return JSON.parse(raw);
+    data = JSON.parse(raw);
   } catch {
     return {};
   }
+  if (!data || typeof data !== 'object') return {};
+  return {
+    ...data,
+    session_id: data.session_id || data.conversation_id || data.sessionId || null,
+    prompt: data.prompt ?? data.text ?? null,
+    cwd: data.cwd || (Array.isArray(data.workspace_roots) ? data.workspace_roots[0] : null) || process.cwd(),
+  };
 }
 
 /**
@@ -95,15 +111,28 @@ export async function cmdCapture(args) {
 export async function cmdHarvest(args) {
   const config = loadConfig();
   let sessionId = args.session || null;
+  let cwd = process.cwd();
 
   if (args.stdin || (!sessionId && !process.stdin.isTTY)) {
     const input = await hookInput();
     if (input.session_id) sessionId = safeId(input.session_id);
+    if (input.cwd) cwd = input.cwd;
   }
 
   const reports = sessionId
     ? [harvestSession(sessionId, { config })]
     : listSessions().map((id) => harvestSession(id, { config }));
+
+  // Cursor has no session-start hook that can inject context, so its rules file
+  // is rewritten here instead, at the end of the session that changed memory.
+  if (args.refreshCursor) {
+    try {
+      const { writeRules } = await import('../agents/cursor.js');
+      writeRules(cwd);
+    } catch {
+      /* refreshing the rules file must never fail a session */
+    }
+  }
 
   if (args.quiet || args.stdin) return 0;
 

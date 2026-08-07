@@ -6,6 +6,8 @@ import { readJournal } from '../core/journal.js';
 import { listSessions } from '../core/session.js';
 import { claudeStatus } from '../agents/claude.js';
 import { codexStatus } from '../agents/codex.js';
+import { cursorStatus } from '../agents/cursor.js';
+import { geminiStatus } from '../agents/gemini.js';
 import { paths, homeRelative } from '../util/paths.js';
 import { estimateTokens } from '../util/text.js';
 import { exists } from '../util/fsx.js';
@@ -94,8 +96,17 @@ export function cmdStatus() {
   heading('Agents');
   if (claude.attached) ok(`Claude Code — ${claude.events.join(', ')} ${c.gray(homeRelative(claude.file))}`);
   else warn(`Claude Code — not attached. Run: wife attach claude`);
-  if (codex.attached) ok(`Codex — managed block in ${c.gray(homeRelative(codex.file))}`);
-  else warn(`Codex — not attached. Run: wife attach codex`);
+  if (codex.attached) ok(`Codex — ${codex.events.join(', ')} ${c.gray(homeRelative(codex.file))}`);
+  else if (codex.blockOnly) warn('Codex — AGENTS.md block only, no hooks. Run: wife attach codex');
+  else warn('Codex — not attached. Run: wife attach codex');
+
+  const cursor = cursorStatus();
+  if (cursor.attached) ok(`Cursor — ${cursor.events.join(', ')} ${c.gray(homeRelative(cursor.file))}`);
+  else warn('Cursor — not attached. Run: wife attach cursor');
+
+  const gemini = geminiStatus();
+  if (gemini.attached) ok(`Gemini CLI — ${c.gray('injection only')} ${c.gray(homeRelative(gemini.file))}`);
+  else warn('Gemini CLI — not attached. Run: wife attach gemini');
 
   heading('Buffers');
   if (!sessions.length) say(c.gray('  no unharvested sessions'));

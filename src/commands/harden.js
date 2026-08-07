@@ -15,7 +15,7 @@ import { factId } from '../util/text.js';
  * A guard that wrongly blocks is worse than a guard that wrongly allows,
  * because the user cannot work around the first one.
  */
-export async function cmdGuard() {
+export async function cmdGuard(args = {}) {
   let input = {};
   try {
     const raw = await readStdin(2000);
@@ -24,19 +24,44 @@ export async function cmdGuard() {
     return 0; // unparseable payload: allow
   }
 
+  // Cursor names things differently and puts the command at the top level.
+  const normalised = {
+    ...input,
+    cwd: input.cwd || (Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : null) || process.cwd(),
+    tool_name: input.tool_name || (input.command !== undefined ? 'Bash' : input.tool_name),
+    tool_input: input.tool_input || (input.command !== undefined ? { command: input.command } : {}),
+  };
+
   let verdict = { deny: false };
   try {
-    verdict = evaluate(input);
+    verdict = evaluate(normalised);
   } catch {
     return 0; // fail open, always
   }
-  if (!verdict.deny) return 0;
 
+  const style = args.style || 'claude';
+  const message = verdict.deny ? `${verdict.reason} [blocked by wife: "${verdict.guard.from}"]` : '';
+
+  if (!verdict.deny) {
+    // Cursor expects an explicit allow; the others treat silence as allow.
+    if (style === 'cursor') say(JSON.stringify({ continue: true, permission: 'allow' }));
+    return 0;
+  }
+
+  if (style === 'codex') {
+    // Codex blocks on exit code 2, with the reason on stderr.
+    process.stderr.write(`${message}\n`);
+    return 2;
+  }
+  if (style === 'cursor') {
+    say(JSON.stringify({ continue: false, permission: 'deny', userMessage: message, agentMessage: message }));
+    return 0;
+  }
   say(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: `${verdict.reason} [blocked by wife: "${verdict.guard.from}"]`,
+      permissionDecisionReason: message,
     },
   }));
   return 0;

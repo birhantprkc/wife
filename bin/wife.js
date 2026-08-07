@@ -11,7 +11,7 @@ import { cmdHarden, cmdGuards, cmdGuard } from '../src/commands/harden.js';
 import { cmdImport, cmdReview, cmdSpread } from '../src/commands/curate.js';
 import { c, say, fail } from '../src/util/out.js';
 
-export const VERSION = '1.3.1';
+export const VERSION = '1.4.0';
 
 const BOOLEAN_FLAGS = new Set([
   'help', 'version', 'verbose', 'quiet', 'json', 'raw', 'stdin', 'fix', 'force',
@@ -57,8 +57,8 @@ const HELP = `${c.bold('wife')} ${c.gray(`v${VERSION}`)} — local memory for co
 
 ${c.bold('Setup')}
   init                     create ~/.wife and attach whatever is installed
-  attach claude|codex      wire wife into an agent  ${c.gray('[--project]')}
-  detach claude|codex      remove it cleanly
+  attach <agent>           claude · codex · cursor · gemini  ${c.gray('[--project]')}
+  detach <agent>           remove it cleanly
   sync                     carry your memory between machines  ${c.gray('[setup <url>] [status]')}
   clone <url>              set up a new machine from your memory repo
   sync-codex               refresh the block wife writes into AGENTS.md
@@ -98,6 +98,7 @@ const ROUTES = {
   sync: (a) => (a._[0] === 'status' ? cmdSyncStatus(a) : cmdSync(a)),
   clone: cmdClone,
   'sync-codex': cmdSyncCodex,
+  'sync-gemini': (a) => { a.gemini = true; return cmdSyncCodex(a); },
   'merge-driver': cmdMergeDriver,
   import: cmdImport,
   review: cmdReview,
@@ -125,6 +126,9 @@ const ROUTES = {
 /** Hook-facing commands must never take the session down with them. */
 const HOOK_COMMANDS = new Set(['inject', 'capture', 'harvest', 'guard', 'merge-driver']);
 
+/** `guard` returns 2 to block under Codex; that is a decision, not a crash. */
+const MEANINGFUL_EXIT = new Set(['guard']);
+
 export async function run(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._.shift();
@@ -142,11 +146,16 @@ export async function run(argv = process.argv.slice(2)) {
   }
 
   try {
-    return (await handler(args)) ?? 0;
+    const code = (await handler(args)) ?? 0;
+    return code;
   } catch (error) {
-    if (HOOK_COMMANDS.has(command)) {
+    if (HOOK_COMMANDS.has(command) && !MEANINGFUL_EXIT.has(command)) {
       process.stderr.write(`wife: ${error.message}\n`);
       return 0;
+    }
+    if (HOOK_COMMANDS.has(command)) {
+      process.stderr.write(`wife: ${error.message}\n`);
+      return 0;   // a crashing guard must allow, never block
     }
     fail(error.message);
     if (args.verbose) console.error(error.stack);
