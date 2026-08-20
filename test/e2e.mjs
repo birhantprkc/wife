@@ -25,6 +25,10 @@ const env = {
   WIFE_HOME: home,
   CLAUDE_CONFIG_DIR: path.join(sandbox, '.claude'),
   CODEX_HOME: path.join(sandbox, '.codex'),
+  CURSOR_HOME: path.join(sandbox, '.cursor-home'),
+  GEMINI_HOME: path.join(sandbox, '.gemini'),
+  npm_config_cache: path.join(sandbox, '.npm-cache'),
+  npm_config_update_notifier: 'false',
   WIFE_NO_COLOR: '1',
   NO_COLOR: '1',
 };
@@ -281,21 +285,32 @@ check('an unknown command exits non-zero with a hint', r.code === 1 && /Unknown 
 // ---------------------------------------------------------------------------
 section('the real installation path');
 
-// `npm link` installs a symlink named `wife`, without the .js extension.
-// Invoking through that link is how every actual user runs this, and it once
-// silently did nothing, so it is checked here rather than trusted.
-const linkDir = path.join(sandbox, 'bin');
-fs.mkdirSync(linkDir, { recursive: true });
-const link = path.join(linkDir, 'wife');
-fs.symlinkSync(BIN, link);
-const viaLink = spawnSync(process.execPath, [link, '--version'], { env, cwd: repo, encoding: 'utf8' });
-check('running through the installed symlink produces output',
-  viaLink.status === 0 && viaLink.stdout.trim().length > 0,
-  `exit ${viaLink.status}, stdout ${JSON.stringify(viaLink.stdout)}`);
-const statusViaLink = spawnSync(process.execPath, [link, 'status'], { env, cwd: repo, encoding: 'utf8' });
+// Exercise npm's real platform-specific launcher: a symlink on POSIX and the
+// generated wife.cmd shim on Windows, where creating a file symlink may require
+// administrator privileges and does not represent how users launch the CLI.
+const installPrefix = path.join(sandbox, 'installed');
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const install = spawnSync(npmCommand, [
+  'install', '--global', '--prefix', installPrefix, ROOT,
+  '--ignore-scripts', '--no-audit', '--no-fund',
+], { env, cwd: repo, encoding: 'utf8', shell: process.platform === 'win32' });
+check('npm installs the package through its real bin path', install.status === 0,
+  `exit ${install.status}: ${(install.stderr || '').slice(0, 300)}`);
+
+const installedBin = process.platform === 'win32'
+  ? path.join(installPrefix, 'wife.cmd')
+  : path.join(installPrefix, 'bin', 'wife');
+const installedWife = (args) => spawnSync(installedBin, args, {
+  env, cwd: repo, encoding: 'utf8', shell: process.platform === 'win32',
+});
+const viaInstall = installedWife(['--version']);
+check('running through the installed launcher produces output',
+  viaInstall.status === 0 && viaInstall.stdout.trim().length > 0,
+  `exit ${viaInstall.status}, stdout ${JSON.stringify(viaInstall.stdout)}`);
+const statusViaInstall = installedWife(['status']);
 check('and a real command works through it too',
-  statusViaLink.status === 0 && /wife/.test(statusViaLink.stdout),
-  `exit ${statusViaLink.status}`);
+  statusViaInstall.status === 0 && /wife/.test(statusViaInstall.stdout),
+  `exit ${statusViaInstall.status}`);
 
 // ---------------------------------------------------------------------------
 fs.rmSync(sandbox, { recursive: true, force: true });

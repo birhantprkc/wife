@@ -65,6 +65,30 @@ export function readJSON(file, fallback = null) {
   }
 }
 
+/**
+ * Inspect JSON owned by another application without ever changing its file.
+ * Wife's own state may be quarantined by readJSON(), but an agent settings file
+ * belongs to the user and must remain byte-for-byte intact when it is invalid.
+ */
+export function inspectJSON(file, fallback = null) {
+  const raw = readText(file);
+  if (raw === null) return { value: fallback, error: null, missing: true };
+  try {
+    return { value: JSON.parse(raw), error: null, missing: false };
+  } catch (error) {
+    return { value: fallback, error, missing: false };
+  }
+}
+
+/** Read external JSON, refusing to overwrite it when it cannot be parsed. */
+export function readJSONStrict(file, fallback = null) {
+  const inspected = inspectJSON(file, fallback);
+  if (inspected.error) {
+    throw new Error(`Invalid JSON in ${file}: ${inspected.error.message}`);
+  }
+  return inspected.value;
+}
+
 export function writeJSON(file, value) {
   writeAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
 }

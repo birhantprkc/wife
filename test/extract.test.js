@@ -10,11 +10,19 @@ describe('secret screening', () => {
     'token ghp_abcdefghijklmnopqrstuvwxyz1234',
     'AKIAIOSFODNN7EXAMPLE is the access key',
     'password = hunter2000xyz',
+    'password is hunter2000xyz',
+    'contraseña: hunter2000xyz',
+    'clave = hunter2000xyz',
+    'remember that my API key is abc123xyz789',
+    'recuerda que mi clave es hunter2000xyz',
+    'client_secret=abcdefghi12345',
     'Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345',
+    'Authorization: Basic dXNlcjpwYXNzd29yZA==',
     'postgres://user:pw@db.example.com:5432/app',
     'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
     '-----BEGIN RSA PRIVATE KEY-----',
     'sha is 356a192b7913b04c54574d18c28d46e6395428ab0123456789abcdef',
+    'abcdEFGHijklMNOPqrstUVWX0123456789abcde==',
   ];
   for (const s of secrets) {
     test(`rejects: ${s.slice(0, 34)}…`, () => {
@@ -28,6 +36,9 @@ describe('secret screening', () => {
       'we use Postgres in this project',
       'always run the tests before committing',
       'my name is Sam and I live in Berlin',
+      'the token budget is 1200 characters',
+      'the client secret rotation policy runs monthly',
+      'la clave es mantener las pruebas rápidas',
     ]) {
       assert.equal(detectSecret(clean), null, `false positive on: ${clean}`);
     }
@@ -112,6 +123,11 @@ describe('extraction — Spanish', () => {
     assert.ok(candidates.length >= 1);
     assert.equal(candidates[0].scope, 'user');
   });
+
+  test('two Spanish identity clauses keep their own labels', () => {
+    const { candidates } = extract('soy ingeniero y trabajo en Acme');
+    assert.deepEqual(candidates.map((c) => c.text), ['Es ingeniero', 'Trabaja en Acme']);
+  });
 });
 
 describe('facts are written in the language they were said in', () => {
@@ -140,6 +156,18 @@ describe('extraction — English', () => {
     assert.equal(candidates[0].explicit, true);
   });
 
+  test('work-at identity uses the employer label, not the location label', () => {
+    const { candidates } = extract('I work at Acme');
+    assert.equal(candidates.length, 1);
+    assert.match(candidates[0].text, /^Works at Acme$/);
+    assert.equal(candidates[0].scope, 'user');
+  });
+
+  test('two English identity clauses remain separate facts', () => {
+    const { candidates } = extract("I'm an engineer and I work at Acme");
+    assert.deepEqual(candidates.map((c) => c.text), ['Is engineer', 'Works at Acme']);
+  });
+
   test('always/never rule keeps its polarity word', () => {
     const { candidates } = extract('Never commit directly to the main branch');
     assert.equal(candidates.length, 1);
@@ -164,9 +192,43 @@ describe('extraction — what it refuses to learn', () => {
   });
 
   test('a prompt containing a secret produces nothing', () => {
-    const { candidates, rejected } = extract('recuerda que mi api key es sk-abcdefghijklmnopqrstuvwxyz');
+    const token = 'sk-abcdefghijklmnopqrstuvwxyz';
+    const result = extract(`recuerda que mi api key es ${token}`);
+    const { candidates, rejected } = result;
     assert.equal(candidates.length, 0);
     assert.equal(rejected[0].reason, REJECTIONS.SECRET);
+    assert.equal(rejected[0].text, '<sentence containing a credential>');
+    assert.ok(!JSON.stringify(result).includes(token), 'a rejected credential must never be echoed');
+  });
+
+  test('a secret before the matched phrase cannot leak through evidence', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz1234';
+    const result = extract(`token ${token} y recuerda que prefiero respuestas cortas`);
+    assert.equal(result.candidates.length, 0);
+    assert.equal(result.rejected[0].reason, REJECTIONS.SECRET);
+    assert.ok(!JSON.stringify(result).includes(token), 'the source sentence leaked the token');
+  });
+
+  test('secret screening runs before candidate truncation', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz1234';
+    const body = `mi configuración preferida para todos los entornos es ${'x'.repeat(95)} ${token}`;
+    const result = extract(`recuerda que ${body}`);
+    assert.equal(body.length > 180, true, 'fixture must cross tidy()\'s truncation boundary');
+    assert.equal(result.candidates.length, 0);
+    assert.equal(result.rejected[0].reason, REJECTIONS.SECRET);
+    assert.ok(!JSON.stringify(result).includes(token), 'truncation hid a token from the gate');
+  });
+
+  test('a durable-looking clause inside a one-off task is still a task', () => {
+    for (const prompt of [
+      'quiero que nunca uses npm para esta tarea',
+      'write a component that always uses memoization',
+      'I want you to always use memoization in this component',
+    ]) {
+      const { candidates, rejected } = extract(prompt);
+      assert.equal(candidates.length, 0, `learned from task: ${prompt}`);
+      assert.equal(rejected[0]?.reason, REJECTIONS.TASK);
+    }
   });
 
   test('a pasted log is never mined', () => {
@@ -233,6 +295,10 @@ describe('regression: scope classification must weigh, not short-circuit', () =>
     ['este proyecto usa Kotlin', 'project', 'a two-word rendered fact is still a fact'],
     ['usamos Deno en el backend', 'project', ''],
     ['prefiero que me expliques poco', 'user', ''],
+    ['Remember that we use pnpm', 'project', 'collective stack decisions belong to the repository'],
+    ['recuerda que usamos pnpm', 'project', 'collective stack decisions belong to the repository'],
+    ['I always deploy on Fridays', 'user', 'scope must retain the first-person cue removed by rendering'],
+    ['prefiero usar Vitest en este proyecto', 'project', 'an explicit project qualifier beats a personal verb'],
   ];
   for (const [prompt, expected, why] of cases) {
     test(`"${prompt}" → ${expected}${why ? ` (${why})` : ''}`, () => {

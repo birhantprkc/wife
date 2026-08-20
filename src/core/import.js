@@ -1,11 +1,10 @@
 import path from 'node:path';
-import os from 'node:os';
 import { readText, exists } from '../util/fsx.js';
 import { claudeHome, codexHome, findProjectRoot } from '../util/paths.js';
 import { tidy, titleCase } from '../util/text.js';
-import { judge } from './extract.js';
+import { judge, REJECTIONS } from './extract.js';
 import { detectSecret } from './redact.js';
-import { BEGIN, END } from '../agents/codex.js';
+import { stripManagedOutput } from '../util/managed.js';
 
 /**
  * Import from the instruction files you already maintain.
@@ -31,7 +30,7 @@ export function sources(cwd = process.cwd()) {
   const root = findProjectRoot(cwd);
   return [
     { file: path.join(claudeHome(), 'CLAUDE.md'), scope: 'user', label: '~/.claude/CLAUDE.md' },
-    { file: path.join(os.homedir(), '.claude', 'rules', 'preferences.md'), scope: 'user', label: '~/.claude/rules/preferences.md' },
+    { file: path.join(claudeHome(), 'rules', 'preferences.md'), scope: 'user', label: '~/.claude/rules/preferences.md' },
     { file: path.join(codexHome(), 'AGENTS.md'), scope: 'user', label: '~/.codex/AGENTS.md' },
     { file: path.join(root, 'CLAUDE.md'), scope: 'project', label: './CLAUDE.md' },
     { file: path.join(root, '.claude', 'CLAUDE.md'), scope: 'project', label: './.claude/CLAUDE.md' },
@@ -43,14 +42,7 @@ export function sources(cwd = process.cwd()) {
 
 /** Remove anything Wife itself wrote, so importing can never become a feedback loop. */
 export function stripManaged(text) {
-  let out = String(text || '');
-  for (let i = 0; i < 10; i++) {
-    const start = out.indexOf(BEGIN);
-    const end = out.indexOf(END);
-    if (start === -1 || end === -1 || end < start) break;
-    out = out.slice(0, start) + out.slice(end + END.length);
-  }
-  return out;
+  return stripManagedOutput(text);
 }
 
 /** Headings that signal the lines under them are not durable facts. */
@@ -70,19 +62,25 @@ export function parseInstructions(raw, { denyPatterns = [] } = {}) {
   const skipped = [];
   const text = stripManaged(raw);
   let heading = null;
-  let inFence = false;
+  let fence = null;
 
   for (const line of text.split('\n')) {
-    if (/^\s*(?:```|~~~)/.test(line)) { inFence = !inFence; continue; }
-    if (inFence) continue;
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!fence) fence = { char: marker[0], length: marker.length };
+      else if (marker[0] === fence.char && marker.length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence) continue;
 
-    const h = /^#{1,6}\s+(.+?)\s*$/.exec(line);
+    const h = /^#{1,6}\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (h) { heading = tidy(h[1], 60); continue; }
     if (heading && SKIP_HEADINGS.test(heading)) continue;
 
     let candidate = null;
     const bullet = /^\s*(?:[-*+]|\d+\.)\s+(.+?)\s*$/.exec(line);
-    if (bullet) candidate = bullet[1];
+    if (bullet && !/^\[[ xX]\]\s+/.test(bullet[1])) candidate = bullet[1];
     else {
       const bare = line.trim();
       // A short standalone sentence that reads like a rule, not prose.
@@ -111,7 +109,13 @@ export function parseInstructions(raw, { denyPatterns = [] } = {}) {
     const clean = tidy(candidate.replace(/[*`]+/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1'), 180);
     const verdict = judge(clean, denyPatterns, { allowImperative: true });
     if (!verdict.ok) {
-      skipped.push({ text: clean, reason: verdict.reason, heading });
+      // Cleanup can reconstruct a credential that was split by markdown
+      // emphasis. Never echo that reconstructed value in verbose output.
+      skipped.push({
+        text: verdict.reason === REJECTIONS.SECRET ? '<line containing a credential>' : clean,
+        reason: verdict.reason,
+        heading,
+      });
       continue;
     }
     kept.push({ text: titleCase(verdict.text), heading });

@@ -26,7 +26,7 @@ const { loadConfig } = await import('../src/core/config.js');
 const { compileContext } = await import('../src/core/compile.js');
 const { DORMANT } = await import('../src/core/store.js');
 const { parseInstructions, stripManaged, importFrom, sources } = await import('../src/core/import.js');
-const { sight, spread } = await import('../src/core/crossproject.js');
+const { sight, spread, markPromoted } = await import('../src/core/crossproject.js');
 const { BEGIN, END } = await import('../src/agents/codex.js');
 
 const DAY = 86_400_000;
@@ -165,9 +165,26 @@ describe('import — from the files people already keep', () => {
     assert.match(kept[0].text, /tabs/i);
   });
 
+  test('a shorter fence inside a longer fence cannot expose code as facts', () => {
+    const { kept } = parseInstructions([
+      '# Examples', '````markdown', '```', '- Always use npm inside this example', '```', '````',
+      '', '## Style', '- Use tabs',
+    ].join('\n'));
+    assert.equal(kept.length, 1);
+    assert.match(kept[0].text, /tabs/i);
+  });
+
   test('skips boilerplate headings', () => {
     const { kept } = parseInstructions('## Installation\n- npm install foo\n- npm run build\n');
     assert.equal(kept.length, 0, 'install steps are not facts about the user');
+  });
+
+  test('skips closing hashes on boilerplate headings and task-list items', () => {
+    const { kept } = parseInstructions([
+      '## Installation ##', '- Always use npm for this install step',
+      '## Roadmap', '- [ ] Always migrate the database today',
+    ].join('\n'));
+    assert.equal(kept.length, 0);
   });
 
   test('a credential in a CLAUDE.md is dropped, not imported', () => {
@@ -188,6 +205,40 @@ describe('import — from the files people already keep', () => {
     const { kept } = parseInstructions(doc);
     assert.equal(kept.length, 1);
     assert.match(kept[0].text, /tabs/i);
+  });
+
+  test('legacy and repeated managed blocks are all removed', () => {
+    const legacyBegin = BEGIN.replace('sync-codex', 'sync');
+    const block = `${legacyBegin}\n- Always use leaked managed output\n${END}`;
+    const doc = `# Mine\n\n- Use tabs\n\n${new Array(11).fill(block).join('\n')}`;
+    const stripped = stripManaged(doc);
+
+    assert.match(stripped, /Use tabs/);
+    assert.doesNotMatch(stripped, /leaked managed output/,
+      'an old marker or an eleventh block would create a feedback loop');
+  });
+
+  test('a marker literal inside a bullet cannot terminate a managed block', () => {
+    const doc = `${BEGIN}\n- Avoid writing ${END} in documentation\n- Never import this managed fact\n${END}\n`;
+    assert.equal(stripManaged(doc).trim(), '');
+  });
+
+  test('managed-marker examples inside fenced documentation are not stripped', () => {
+    const docs = [
+      '````html',
+      '<!-- wife:begin example -->',
+      '- Always preserve this user documentation',
+      '<!-- wife:end -->',
+      '````html',
+      '- Still fenced after a would-be closing line with an info string',
+      '````',
+      '',
+      `${BEGIN}\n- Remove actual managed output\n${END}`,
+    ].join('\n');
+    const stripped = stripManaged(docs);
+    assert.match(stripped, /preserve this user documentation/);
+    assert.match(stripped, /Still fenced/);
+    assert.doesNotMatch(stripped, /actual managed output/);
   });
 
   test('file scope decides fact scope', () => {
@@ -232,6 +283,13 @@ describe('import — from the files people already keep', () => {
     fs.writeFileSync(path.join(repo, 'CLAUDE.md'), '- Use pnpm\n');
     assert.equal(sources(repo).length, 1);
   });
+
+  test('Claude rules follow CLAUDE_CONFIG_DIR instead of the OS home', () => {
+    const preferences = path.join(process.env.CLAUDE_CONFIG_DIR, 'rules', 'preferences.md');
+    fs.mkdirSync(path.dirname(preferences), { recursive: true });
+    fs.writeFileSync(preferences, '- Always answer briefly\n');
+    assert.ok(sources(repo).some((source) => source.file === preferences));
+  });
 });
 
 describe('cross-project promotion', () => {
@@ -254,6 +312,7 @@ describe('cross-project promotion', () => {
     const t = 'Writes tests before refactors';
     sight({ text: t, projectKey: 'a', threshold: 2 });
     assert.equal(sight({ text: t, projectKey: 'b', threshold: 2 }), true);
+    markPromoted(t);
     assert.equal(sight({ text: t, projectKey: 'c', threshold: 2 }), false, 'promoted twice');
   });
 
@@ -294,6 +353,17 @@ describe('regression: the emphasis-stripping credential leak', () => {
     const { kept, skipped } = parseInstructions('## Env\n- Use ghp_abcdefghijklmnopqrstuvwxyz1234 for CI\n');
     assert.equal(kept.length, 0);
     assert.match(skipped[0].reason, /credential/i);
+  });
+
+  test('a credential reconstructed by cleanup is rejected without being echoed', () => {
+    const secret = 'ghp_abcdefghijklmnopqrstuvwxyz1234';
+    const raw = '- Always use token ghp_abcdefghijkl**mnopqrstuvwxyz1234**';
+    const result = parseInstructions(raw);
+
+    assert.equal(result.kept.length, 0);
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(secret),
+      'verbose import output must not reconstruct and print the credential');
+    assert.match(result.skipped[0].text, /credential/i);
   });
 
   test('but a normal underscore in prose is preserved in the stored fact', () => {

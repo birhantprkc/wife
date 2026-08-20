@@ -1,13 +1,35 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeHome } from '../util/paths.js';
-import { readJSON, writeJSON, exists, ensureDir } from '../util/fsx.js';
+import { inspectJSON, readJSONStrict, writeJSON, exists, ensureDir } from '../util/fsx.js';
 import { activeGuards } from '../core/guards.js';
 
 const hasGuards = () => { try { return activeGuards().length > 0; } catch { return false; } };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BIN = path.resolve(HERE, '..', '..', 'bin', 'wife.js');
+
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function schemaProblem(value) {
+  if (!isRecord(value)) return 'expected the document root to be an object';
+  if (value.hooks !== undefined && !isRecord(value.hooks)) return 'expected "hooks" to be an object';
+  for (const [event, groups] of Object.entries(value.hooks || {})) {
+    if (!Array.isArray(groups)) return `expected hooks.${event} to be an array`;
+    for (let i = 0; i < groups.length; i++) {
+      if (!isRecord(groups[i])) return `expected hooks.${event}[${i}] to be an object`;
+      if (!Array.isArray(groups[i].hooks)) return `expected hooks.${event}[${i}].hooks to be an array`;
+    }
+  }
+  return null;
+}
+
+function readSettings(file) {
+  const value = readJSONStrict(file, null);
+  const problem = schemaProblem(value);
+  if (problem) throw new Error(`Invalid JSON structure in ${file}: ${problem}`);
+  return value;
+}
 
 /**
  * Hooks are registered in exec form (`command` + `args`) with an absolute path
@@ -41,8 +63,19 @@ export function isWifeHandler(handler) {
   if (!handler || typeof handler !== 'object') return false;
   const args = Array.isArray(handler.args) ? handler.args : [];
   const inArgs = args.some((a) => typeof a === 'string' && /(?:^|[\\/])wife\.js$/.test(a));
-  const inCommand = typeof handler.command === 'string' && /wife(?:\.js)?["']?\s|wife\.js$/.test(handler.command);
+  const inCommand = typeof handler.command === 'string' && /(?:^|[\\/])wife\.js(?:$|["'\s])/.test(handler.command);
   return inArgs || inCommand;
+}
+
+function removeWifeHooks(hooks) {
+  for (const [event, groups] of Object.entries(hooks || {})) {
+    if (!Array.isArray(groups)) continue;
+    const cleaned = groups
+      .map((group) => ({ ...group, hooks: (group.hooks || []).filter((h) => !isWifeHandler(h)) }))
+      .filter((group) => (group.hooks || []).length > 0);
+    if (cleaned.length) hooks[event] = cleaned;
+    else delete hooks[event];
+  }
 }
 
 export function settingsPath({ project = false, cwd = process.cwd() } = {}) {
@@ -56,19 +89,19 @@ export function settingsPath({ project = false, cwd = process.cwd() } = {}) {
 export function attachClaude({ project = false, cwd = process.cwd(), nodeBin = process.execPath } = {}) {
   const file = settingsPath({ project, cwd });
   ensureDir(path.dirname(file));
-  const settings = readJSON(file, null) || {};
+  const settings = exists(file) ? readSettings(file) : {};
   const before = JSON.stringify(settings);
 
   settings.hooks = settings.hooks || {};
+  // Clean every event, including a stale PreToolUse left after the final guard
+  // was disabled. Wanted hooks are added back below from the current state.
+  removeWifeHooks(settings.hooks);
   const wanted = wifeHooks(nodeBin);
   const events = [];
 
   for (const [event, groups] of Object.entries(wanted)) {
     const existing = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
-    const cleaned = existing
-      .map((group) => ({ ...group, hooks: (group.hooks || []).filter((h) => !isWifeHandler(h)) }))
-      .filter((group) => (group.hooks || []).length > 0);
-    settings.hooks[event] = [...cleaned, ...groups];
+    settings.hooks[event] = [...existing, ...groups];
     events.push(event);
   }
 
@@ -79,7 +112,7 @@ export function attachClaude({ project = false, cwd = process.cwd(), nodeBin = p
 export function detachClaude({ project = false, cwd = process.cwd() } = {}) {
   const file = settingsPath({ project, cwd });
   if (!exists(file)) return { file, removed: 0, missing: true };
-  const settings = readJSON(file, null) || {};
+  const settings = readSettings(file);
   let removed = 0;
   for (const [event, groups] of Object.entries(settings.hooks || {})) {
     if (!Array.isArray(groups)) continue;
@@ -102,10 +135,12 @@ export function detachClaude({ project = false, cwd = process.cwd() } = {}) {
 
 export function claudeStatus({ project = false, cwd = process.cwd() } = {}) {
   const file = settingsPath({ project, cwd });
-  const settings = readJSON(file, null);
-  if (!settings) return { file, attached: false, events: [] };
+  const inspected = inspectJSON(file, null);
+  const settings = inspected.value;
+  const invalid = Boolean(inspected.error || (!inspected.missing && schemaProblem(settings)));
+  if (invalid || !settings) return { file, attached: false, events: [], invalid };
   const events = Object.entries(settings.hooks || {})
     .filter(([, groups]) => Array.isArray(groups) && groups.some((g) => (g.hooks || []).some(isWifeHandler)))
     .map(([event]) => event);
-  return { file, attached: events.length > 0, events };
+  return { file, attached: events.length > 0, events, invalid: false };
 }

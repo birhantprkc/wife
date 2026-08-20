@@ -22,6 +22,7 @@ export function openIdentity(config = loadConfig()) {
     header: IDENTITY_HEADER,
     halfLife: config.halfLife.identity,
     scope: 'user',
+    denyPatterns: config.denyPatterns,
   }).load();
 }
 
@@ -49,6 +50,7 @@ export function openProject(cwd = process.cwd(), config = loadConfig()) {
     header: `${PROJECT_HEADER}\n<!-- ${homeRelative(root)} -->`,
     halfLife: config.halfLife.project,
     scope: `project:${key}`,
+    denyPatterns: config.denyPatterns,
   }).load();
 
   return { store, meta, key, root, name };

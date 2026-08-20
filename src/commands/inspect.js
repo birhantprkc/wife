@@ -94,14 +94,17 @@ export function cmdStatus() {
   say(`  root        ${homeRelative(project.root)}`);
 
   heading('Agents');
-  if (claude.attached) ok(`Claude Code — ${claude.events.join(', ')} ${c.gray(homeRelative(claude.file))}`);
+  if (claude.invalid) warn(`Claude Code — invalid settings JSON at ${homeRelative(claude.file)}. Fix it before attach/detach.`);
+  else if (claude.attached) ok(`Claude Code — ${claude.events.join(', ')} ${c.gray(homeRelative(claude.file))}`);
   else warn(`Claude Code — not attached. Run: wife attach claude`);
-  if (codex.attached) ok(`Codex — ${codex.events.join(', ')} ${c.gray(homeRelative(codex.file))}`);
+  if (codex.invalid) warn(`Codex — invalid hooks JSON at ${homeRelative(codex.file)}. Fix it before attach/detach.`);
+  else if (codex.attached) ok(`Codex — ${codex.events.join(', ')} ${c.gray(homeRelative(codex.file))}`);
   else if (codex.blockOnly) warn('Codex — AGENTS.md block only, no hooks. Run: wife attach codex');
   else warn('Codex — not attached. Run: wife attach codex');
 
   const cursor = cursorStatus();
-  if (cursor.attached) ok(`Cursor — ${cursor.events.join(', ')} ${c.gray(homeRelative(cursor.file))}`);
+  if (cursor.invalid) warn(`Cursor — invalid hooks JSON at ${homeRelative(cursor.file)}. Fix it before attach/detach.`);
+  else if (cursor.attached) ok(`Cursor — ${cursor.events.join(', ')} ${c.gray(homeRelative(cursor.file))}`);
   else warn('Cursor — not attached. Run: wife attach cursor');
 
   const gemini = geminiStatus();

@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'wife.js');
 
 let sandbox;
 beforeEach(() => {
@@ -10,19 +14,25 @@ beforeEach(() => {
   process.env.WIFE_HOME = path.join(sandbox, '.wife');
   process.env.CLAUDE_CONFIG_DIR = path.join(sandbox, '.claude');
   process.env.CODEX_HOME = path.join(sandbox, '.codex');
+  process.env.CURSOR_HOME = path.join(sandbox, '.cursor-home');
+  process.env.GEMINI_HOME = path.join(sandbox, '.gemini');
 });
 afterEach(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
   delete process.env.WIFE_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.CODEX_HOME;
+  delete process.env.CURSOR_HOME;
+  delete process.env.GEMINI_HOME;
 });
 
 const { attachClaude, detachClaude, claudeStatus, isWifeHandler, wifeHooks } = await import('../src/agents/claude.js');
-const { attachCodex, detachCodex, codexStatus, upsertBlock, codexHooks, hooksPath,
+const { attachCodex, detachCodex, detachCodexBlock, codexStatus, upsertBlock, codexHooks, hooksPath,
   isWifeHandler: isWifeCodexHandler, BEGIN, END } = await import('../src/agents/codex.js');
+const { attachCursor, detachCursor, cursorStatus, hooksPath: cursorHooksPath } = await import('../src/agents/cursor.js');
+const { attachGemini, geminiPath } = await import('../src/agents/gemini.js');
 const { refines, contradicts } = await import('../src/util/text.js');
-const { openIdentity } = await import('../src/core/memory.js');
+const { openIdentity, openProject } = await import('../src/core/memory.js');
 
 describe('regression: merging must not collapse different facts', () => {
   test('one differing word keeps two facts apart, however long they are', () => {
@@ -125,6 +135,10 @@ describe('Claude Code wiring', () => {
     attachClaude();
     assert.equal(claudeStatus().attached, true);
   });
+
+  test('does not mistake midwife.js for one of its own handlers', () => {
+    assert.equal(isWifeHandler({ command: 'node', args: ['/tools/midwife.js'] }), false);
+  });
 });
 
 describe('Codex wiring', () => {
@@ -199,6 +213,85 @@ describe('Codex wiring', () => {
     assert.ok(resynced.includes('# Mine'));
   });
 
+  test('replaces a legacy generic full-line block instead of stacking it', () => {
+    const legacy = '# Mine\n\n<!-- wife:begin managed by an old release -->\nOLD\n<!-- wife:end -->\n';
+    const resynced = upsertBlock(legacy, `${BEGIN}\nNEW\n${END}`);
+    assert.equal((resynced.match(/^[ \t]*<!--[ \t]*wife:begin\b/gm) || []).length, 1);
+    assert.ok(resynced.includes('NEW'));
+    assert.ok(!resynced.includes('OLD'));
+  });
+
+  test('only recognises markers that occupy a complete line', () => {
+    const docs = '# Docs\n\nExample: `<!-- wife:begin old -->` and `<!-- wife:end -->`.\n';
+    const merged = upsertBlock(docs, `${BEGIN}\nBLOCK\n${END}`);
+    assert.ok(merged.includes('Example: `<!-- wife:begin old -->`'));
+    assert.equal((merged.match(/^[ \t]*<!--[ \t]*wife:begin\b/gm) || []).length, 1);
+  });
+
+  test('marker examples inside CommonMark fences remain user-owned text', () => {
+    const fenced = [
+      '# Documentation',
+      '````markdown',
+      '<!-- wife:begin example one -->',
+      'USER DOCUMENTATION ONE',
+      '<!-- wife:end -->',
+      '````html',
+      '<!-- wife:begin example two -->',
+      'USER DOCUMENTATION TWO',
+      '<!-- wife:end -->',
+      '````',
+      '',
+    ].join('\n');
+    const merged = upsertBlock(fenced, `${BEGIN}\nREAL BLOCK\n${END}`);
+    assert.match(merged, /USER DOCUMENTATION ONE/);
+    assert.match(merged, /USER DOCUMENTATION TWO/);
+    assert.match(merged, /REAL BLOCK/);
+
+    const file = path.join(sandbox, '.codex', 'AGENTS.md');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, merged);
+    detachCodexBlock();
+    const detached = fs.readFileSync(file, 'utf8');
+    assert.match(detached, /USER DOCUMENTATION ONE/);
+    assert.match(detached, /USER DOCUMENTATION TWO/);
+    assert.doesNotMatch(detached, /REAL BLOCK/);
+  });
+
+  test('ignores orphan ends and consolidates every complete historical block', () => {
+    const historical = [
+      '<!-- wife:end -->',
+      '# User text before',
+      '<!-- wife:begin release one -->',
+      'OLD ONE',
+      '<!-- wife:end -->',
+      'User text between',
+      '<!-- wife:begin release two -->',
+      'OLD TWO',
+      '<!-- wife:end -->',
+      'User text after',
+      '',
+    ].join('\n');
+    const resynced = upsertBlock(historical, `${BEGIN}\nNEW\n${END}`);
+    assert.equal((resynced.match(/^[ \t]*<!--[ \t]*wife:begin\b/gm) || []).length, 1);
+    assert.ok(resynced.startsWith('<!-- wife:end -->'));
+    assert.match(resynced, /User text before/);
+    assert.match(resynced, /User text between/);
+    assert.match(resynced, /User text after/);
+    assert.doesNotMatch(resynced, /OLD ONE|OLD TWO/);
+
+    const file = path.join(sandbox, '.codex', 'AGENTS.md');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, historical);
+    const detached = detachCodexBlock();
+    const after = fs.readFileSync(file, 'utf8');
+    assert.equal(detached.removed, true);
+    assert.equal((after.match(/^[ \t]*<!--[ \t]*wife:begin\b/gm) || []).length, 0);
+    assert.ok(after.startsWith('<!-- wife:end -->'));
+    assert.match(after, /User text before/);
+    assert.match(after, /User text between/);
+    assert.match(after, /User text after/);
+  });
+
   test('detach removes hooks and the block, leaving other content behind', () => {
     const file = path.join(sandbox, '.codex', 'AGENTS.md');
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -209,5 +302,154 @@ describe('Codex wiring', () => {
     assert.ok(after.includes('# House rules'));
     assert.ok(after.includes('Use tabs.'));
     assert.ok(!after.includes(BEGIN));
+  });
+
+  test('a malformed fallback cannot leave attach or detach half-applied', () => {
+    const agentsFile = path.join(sandbox, '.codex', 'AGENTS.md');
+    const hooksFile = hooksPath();
+    const configFile = path.join(sandbox, '.codex', 'config.toml');
+    const malformed = '# User rules\n\n<!-- wife:begin legacy -->\nunterminated\n';
+    fs.mkdirSync(path.dirname(agentsFile), { recursive: true });
+    fs.writeFileSync(agentsFile, malformed);
+
+    assert.throws(() => attachCodex(), /Malformed wife managed block/);
+    assert.equal(fs.existsSync(hooksFile), false, 'attach wrote hooks before validating AGENTS.md');
+    assert.equal(fs.existsSync(configFile), false, 'attach changed config before validating AGENTS.md');
+    assert.equal(fs.readFileSync(agentsFile, 'utf8'), malformed);
+
+    fs.writeFileSync(agentsFile, '# User rules\n');
+    attachCodex();
+    const hooksBefore = fs.readFileSync(hooksFile, 'utf8');
+    const configBefore = fs.readFileSync(configFile, 'utf8');
+    fs.writeFileSync(agentsFile, malformed);
+
+    assert.throws(() => detachCodex(), /Malformed wife managed block/);
+    assert.equal(fs.readFileSync(hooksFile, 'utf8'), hooksBefore, 'detach removed hooks before validating AGENTS.md');
+    assert.equal(fs.readFileSync(configFile, 'utf8'), configBefore);
+    assert.equal(fs.readFileSync(agentsFile, 'utf8'), malformed);
+  });
+});
+
+describe('global context scope', () => {
+  test('global Codex and Gemini files exclude the current project memory', () => {
+    const repo = path.join(sandbox, 'repo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+
+    const identity = openIdentity();
+    identity.upsert({ text: 'Prefers identity-only answers', section: 'Who' });
+    identity.save();
+    const project = openProject(repo);
+    project.store.upsert({ text: 'Project-only sentinel uses lunar deploys', section: 'Stack' });
+    project.store.save();
+
+    attachCodex({ cwd: repo });
+    const globalCodex = fs.readFileSync(path.join(sandbox, '.codex', 'AGENTS.md'), 'utf8');
+    assert.match(globalCodex, /identity-only/i);
+    assert.doesNotMatch(globalCodex, /lunar deploys/i);
+
+    attachGemini({ cwd: repo });
+    const globalGemini = fs.readFileSync(geminiPath(), 'utf8');
+    assert.match(globalGemini, /identity-only/i);
+    assert.doesNotMatch(globalGemini, /lunar deploys/i);
+
+    attachCodex({ project: true, cwd: repo });
+    assert.match(fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8'), /lunar deploys/i);
+    attachGemini({ project: true, cwd: repo });
+    assert.match(fs.readFileSync(path.join(repo, 'GEMINI.md'), 'utf8'), /lunar deploys/i);
+  });
+});
+
+describe('external JSON safety', () => {
+  const integrations = [
+    {
+      name: 'Claude Code',
+      file: () => path.join(sandbox, '.claude', 'settings.json'),
+      status: () => claudeStatus(),
+      attach: () => attachClaude(),
+      detach: () => detachClaude(),
+      malformedEvents: ['{"hooks":{"SessionStart":{}}}', '{"hooks":{"SessionStart":[null]}}'],
+    },
+    {
+      name: 'Codex',
+      file: () => hooksPath(),
+      status: () => codexStatus(),
+      attach: () => attachCodex(),
+      detach: () => detachCodex(),
+      malformedEvents: ['{"hooks":{"SessionStart":{}}}', '{"hooks":{"SessionStart":[null]}}'],
+    },
+    {
+      name: 'Cursor',
+      file: () => cursorHooksPath({ project: false }),
+      status: () => cursorStatus({ project: false }),
+      attach: () => attachCursor({ project: false }),
+      detach: () => detachCursor({ project: false }),
+      malformedEvents: ['{"hooks":{"SessionStart":{}}}'],
+    },
+  ];
+
+  for (const integration of integrations) {
+    test(`${integration.name}: status is read-only and attach/detach reject invalid JSON`, () => {
+      const file = integration.file();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const invalid = '{ "hooks": [ definitely not JSON';
+      fs.writeFileSync(file, invalid);
+
+      const status = integration.status();
+      assert.equal(status.attached, false);
+      assert.equal(status.invalid, true);
+      assert.equal(fs.readFileSync(file, 'utf8'), invalid);
+      assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.includes('.corrupt.')), false);
+
+      assert.throws(integration.attach, /Invalid JSON/);
+      assert.throws(integration.detach, /Invalid JSON/);
+      assert.equal(fs.readFileSync(file, 'utf8'), invalid);
+      assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.includes('.corrupt.')), false);
+    });
+
+    for (const [index, invalid] of ['[]', '{"hooks":[]}'].entries()) {
+      test(`${integration.name}: rejects invalid root/hooks shape ${index + 1} without changing bytes`, () => {
+        const file = integration.file();
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, invalid);
+
+        assert.equal(integration.status().invalid, true);
+        assert.throws(integration.attach, /Invalid JSON structure/);
+        assert.throws(integration.detach, /Invalid JSON structure/);
+        assert.equal(fs.readFileSync(file, 'utf8'), invalid);
+      });
+    }
+
+    for (const [index, invalid] of integration.malformedEvents.entries()) {
+      test(`${integration.name}: rejects malformed nested hooks ${index + 1} without changing bytes`, () => {
+        const file = integration.file();
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, invalid);
+
+        assert.equal(integration.status().invalid, true);
+        assert.throws(integration.attach, /Invalid JSON structure/);
+        assert.throws(integration.detach, /Invalid JSON structure/);
+        assert.equal(fs.readFileSync(file, 'utf8'), invalid);
+      });
+    }
+  }
+
+  test('the status command reports invalid JSON and its path without modifying it', () => {
+    const repo = path.join(sandbox, 'repo');
+    const file = path.join(sandbox, '.claude', 'settings.json');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const invalid = '{bad json';
+    fs.writeFileSync(file, invalid);
+
+    const result = spawnSync(process.execPath, [CLI, 'status'], {
+      cwd: repo,
+      env: { ...process.env, NO_COLOR: '1', WIFE_NO_COLOR: '1' },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Claude Code.*invalid settings JSON.*settings\.json/i);
+    assert.doesNotMatch(result.stdout, /Claude Code.*not attached/i);
+    assert.equal(fs.readFileSync(file, 'utf8'), invalid);
+    assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.includes('.corrupt.')), false);
   });
 });

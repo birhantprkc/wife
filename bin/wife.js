@@ -10,6 +10,7 @@ import { cmdSync, cmdClone, cmdSyncStatus, cmdMergeDriver } from '../src/command
 import { cmdHarden, cmdGuards, cmdGuard } from '../src/commands/harden.js';
 import { cmdImport, cmdReview, cmdSpread } from '../src/commands/curate.js';
 import { c, say, fail } from '../src/util/out.js';
+import { withStateLock } from '../src/util/lock.js';
 
 export const VERSION = '1.4.0';
 
@@ -129,6 +130,14 @@ const HOOK_COMMANDS = new Set(['inject', 'capture', 'harvest', 'guard', 'merge-d
 /** `guard` returns 2 to block under Codex; that is a decision, not a crash. */
 const MEANINGFUL_EXIT = new Set(['guard']);
 
+// These commands perform read-modify-write operations on shared Wife state.
+// Serialising them prevents two agents ending at the same time (or a manual
+// command racing a hook) from silently overwriting each other's facts.
+const STATE_MUTATIONS = new Set([
+  'init', 'sync', 'import', 'review', 'harden', 'guards',
+  'remember', 'forget', 'pin', 'unpin', 'doctor', 'config',
+]);
+
 export async function run(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._.shift();
@@ -146,7 +155,17 @@ export async function run(argv = process.argv.slice(2)) {
   }
 
   try {
-    const code = (await handler(args)) ?? 0;
+    let code;
+    if (STATE_MUTATIONS.has(command)) {
+      const locked = await withStateLock(() => handler(args));
+      if (!locked.acquired) {
+        fail('Wife memory is busy in another process. Try the command again.');
+        return 1;
+      }
+      code = locked.value ?? 0;
+    } else {
+      code = (await handler(args)) ?? 0;
+    }
     return code;
   } catch (error) {
     if (HOOK_COMMANDS.has(command) && !MEANINGFUL_EXIT.has(command)) {

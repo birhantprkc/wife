@@ -25,7 +25,11 @@ function check(label, cond, detail = '') {
   else { failed++; failures.push(`${label}${detail ? `\n      ${detail}` : ''}`); console.log(`  \u001b[31m✗\u001b[0m ${label}${detail ? `\n      ${detail}` : ''}`); }
 }
 function section(t) { console.log(`\n\u001b[1m${t}\u001b[0m`); }
+const gitAt = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
 
+// Every WIFE_HOME is deliberately nested under an unrelated repository. Git
+// discovery must not make Wife operate on that ancestor by mistake.
+spawnSync('git', ['init', '-b', 'main', sandbox], { encoding: 'utf8' });
 spawnSync('git', ['init', '--bare', '-b', 'main', bare], { encoding: 'utf8' });
 
 /** One machine: its own WIFE_HOME, its own repos, its own clone of the remote. */
@@ -68,6 +72,10 @@ function machine(name) {
 section('laptop — first machine, pushes up');
 const laptop = machine('laptop');
 laptop.run(['init']);
+fs.writeFileSync(path.join(laptop.home, '.gitignore'),
+  'custom-local.tmp\nsessions/\n!sessions/\n.state.lock\n!.state.lock\n');
+fs.writeFileSync(path.join(laptop.home, '.gitattributes'),
+  '*.custom merge=union\n*.index.json    merge=wife\n*.index.json merge=text\n*.md merge=wife-md\n*.md merge=text\n');
 laptop.say('recuerda que trabajo siempre en español');
 laptop.say('recuerda que prefiero respuestas cortas');
 
@@ -77,15 +85,38 @@ check('makes ~/.wife a git repo', fs.existsSync(path.join(laptop.home, '.git')))
 const driver = spawnSync('git', ['config', '--get', 'merge.wife.driver'], { cwd: laptop.home, encoding: 'utf8' }).stdout || '';
 const mdDriver = spawnSync('git', ['config', '--get', 'merge.wife-md.driver'], { cwd: laptop.home, encoding: 'utf8' }).stdout || '';
 check('registers the semantic merge driver', /merge-driver/.test(driver), driver);
+check('passes Git logical path %P to the semantic driver', /%P/.test(driver), driver);
 check('registers the markdown no-op driver (merge=ours is NOT a git built-in)',
   mdDriver.trim() === 'true', mdDriver);
 check('marks index files for the driver in .gitattributes',
   fs.readFileSync(path.join(laptop.home, '.gitattributes'), 'utf8').includes('*.index.json    merge=wife'));
+check('repairs .gitattributes without erasing user rules',
+  fs.readFileSync(path.join(laptop.home, '.gitattributes'), 'utf8').includes('*.custom merge=union'));
+check('the repaired index rule wins over a later user override',
+  /merge: wife\s*$/.test(gitAt(laptop.home, ['check-attr', 'merge', '--', 'identity.index.json']).stdout));
+check('the repaired markdown rule wins over a later user override',
+  /merge: wife-md\s*$/.test(gitAt(laptop.home, ['check-attr', 'merge', '--', 'identity.md']).stdout));
 check('ignores sessions/, so raw prompts never leave the machine',
-  fs.readFileSync(path.join(laptop.home, '.gitignore'), 'utf8').includes('sessions/'));
+  gitAt(laptop.home, ['check-ignore', '--no-index', 'sessions/private.jsonl']).status === 0);
+check('repairs .gitignore without erasing user rules or exposing the state lock', (() => {
+  const ignore = fs.readFileSync(path.join(laptop.home, '.gitignore'), 'utf8');
+  return ignore.includes('custom-local.tmp') &&
+    gitAt(laptop.home, ['check-ignore', '--no-index', '.state.lock']).status === 0;
+})());
+
+// Simulate a legacy/newly staged raw buffer. It has not reached history yet, so
+// Wife can safely untrack it while leaving the local working copy untouched.
+const stagedSession = path.join(laptop.home, 'sessions', 'staged-private.jsonl');
+fs.mkdirSync(path.dirname(stagedSession), { recursive: true });
+fs.writeFileSync(stagedSession, '{"prompt":"password = must-stay-local"}\n');
+gitAt(laptop.home, ['add', '-f', 'sessions/staged-private.jsonl']);
 
 r = laptop.run(['sync']);
 check('first sync pushes', r.status === 0, (r.stderr || r.stdout).trim());
+check('a newly staged private session is removed from Git without deleting it locally',
+  fs.existsSync(stagedSession) && !gitAt(laptop.home, ['ls-files', '--', 'sessions']).stdout.trim());
+check('neither sessions nor the live state lock reached the remote tip',
+  !gitAt(bare, ['ls-tree', '-r', '--name-only', 'main', '--', 'sessions', '.state.lock']).stdout.trim());
 
 // ---------------------------------------------------------------------------
 section('desktop — second machine, clones');
@@ -104,6 +135,8 @@ laptop.say('este proyecto usa Postgres y Fastify', { repo: 'api' });
 
 desktop.say('recuerda que uso pnpm en vez de npm');
 desktop.say('recuerda que odio las explicaciones largas');
+desktop.say('este proyecto usa Postgres y Fastify', { repo: 'web' });
+desktop.say('este proyecto usa Postgres y Fastify', { repo: 'web' });
 
 check('laptop learned something the desktop has not seen', /viernes/i.test(laptop.md()));
 check('desktop learned something the laptop has not seen', /pnpm/i.test(desktop.md()));
@@ -129,6 +162,25 @@ check('the two machines are identical, fact for fact',
   `laptop:\n${factsOf(l).join('\n')}\n\ndesktop:\n${factsOf(d).join('\n')}`);
 check('project memory converged too',
   /Postgres/i.test(desktop.projectMd()), desktop.projectMd());
+let journalRows = [], journalError = '';
+try {
+  journalRows = fs.readFileSync(path.join(desktop.home, 'journal.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+} catch (error) {
+  journalError = error.message;
+}
+check('journal conflicts use the JSONL union driver instead of becoming an empty index',
+  !journalError && journalRows.length > 0 && !Object.hasOwn(journalRows[0], 'facts'), journalError);
+const journalText = JSON.stringify(journalRows);
+check('the merged journal keeps events from both machines',
+  /viernes/i.test(journalText) && /pnpm/i.test(journalText), journalText.slice(0, 500));
+
+let ledger = null;
+try { ledger = JSON.parse(fs.readFileSync(path.join(desktop.home, 'cross-project.json'), 'utf8')); } catch { /* checked below */ }
+const sharedLedgerEntry = Object.values(ledger?.facts || {}).find((entry) => /Postgres/i.test(entry.text));
+check('cross-project conflicts union repo sightings with the ledger driver',
+  sharedLedgerEntry?.projects?.length === 2,
+  JSON.stringify(sharedLedgerEntry || ledger));
 
 // ---------------------------------------------------------------------------
 section('a third machine — nothing here is limited to two');
@@ -150,7 +202,8 @@ check('all three converge',
 
 // ---------------------------------------------------------------------------
 section('deleting a fact on one machine must stick');
-laptop.run(['forget', 'pnpm']);
+fs.writeFileSync(path.join(laptop.home, 'identity.md'),
+  laptop.md().split('\n').filter((line) => !/pnpm/i.test(line)).join('\n'));
 check('the laptop forgot it', !/pnpm/i.test(laptop.md()));
 laptop.run(['sync']);
 desktop.run(['sync']);
@@ -197,6 +250,67 @@ check('reports the remote and drift', /remote/i.test(r.stdout) && /ahead/i.test(
 
 // ---------------------------------------------------------------------------
 section('resilience');
+const unsafe = machine('unsafe-history');
+unsafe.run(['init']);
+unsafe.run(['sync', 'setup', bare]);
+const committedSession = path.join(unsafe.home, 'sessions', 'committed-private.jsonl');
+fs.mkdirSync(path.dirname(committedSession), { recursive: true });
+fs.writeFileSync(committedSession, '{"prompt":"token = must-never-be-pushed"}\n');
+gitAt(unsafe.home, ['add', '-f', 'sessions/committed-private.jsonl']);
+gitAt(unsafe.home, ['-c', 'user.email=wife@localhost', '-c', 'user.name=wife',
+  'commit', '-m', 'legacy private session']);
+const remoteBeforeUnsafe = gitAt(bare, ['rev-parse', 'main']).stdout.trim();
+r = unsafe.run(['sync']);
+check('sync refuses committed private session history instead of uploading it',
+  r.status === 1 && /Git history/i.test(`${r.stdout}\n${r.stderr}`), `${r.stdout}\n${r.stderr}`);
+check('the refused sync keeps the private file and leaves the remote unchanged',
+  fs.existsSync(committedSession) && gitAt(bare, ['rev-parse', 'main']).stdout.trim() === remoteBeforeUnsafe);
+
+const corruptDir = path.join(sandbox, 'corrupt-merge-input');
+fs.mkdirSync(corruptDir, { recursive: true });
+const baseIndex = path.join(corruptDir, 'base');
+const ourIndex = path.join(corruptDir, 'ours');
+const theirIndex = path.join(corruptDir, 'theirs');
+const validIndex = JSON.stringify({ version: 2, facts: {}, pending: {}, tombstones: {} });
+fs.writeFileSync(baseIndex, validIndex);
+fs.writeFileSync(ourIndex, validIndex);
+fs.writeFileSync(theirIndex, '{ broken json');
+const beforeCorruptMerge = fs.readFileSync(ourIndex, 'utf8');
+r = laptop.run(['merge-driver', baseIndex, ourIndex, theirIndex, 'identity.index.json']);
+check('a corrupt merge input stops git instead of becoming a deletion', r.status === 1, r.stderr);
+check('and leaves the current index byte-for-byte untouched',
+  fs.readFileSync(ourIndex, 'utf8') === beforeCorruptMerge);
+
+const malformedFactIndex = JSON.parse(fs.readFileSync(path.join(laptop.home, 'identity.index.json'), 'utf8'));
+const [sampleId, originalSampleFact] = Object.entries(malformedFactIndex.facts)[0];
+const sampleFact = { ...originalSampleFact };
+delete malformedFactIndex.facts[sampleId].section;
+fs.writeFileSync(ourIndex, validIndex);
+fs.writeFileSync(theirIndex, JSON.stringify(malformedFactIndex));
+r = laptop.run(['merge-driver', baseIndex, ourIndex, theirIndex, 'identity.index.json']);
+check('a structurally incomplete fact stops the merge before Store can lose it',
+  r.status === 1 && fs.readFileSync(ourIndex, 'utf8') === validIndex, r.stderr);
+
+const malformedPending = {
+  version: 2, facts: {}, tombstones: {}, pending: {
+    [sampleId]: {
+      text: sampleFact.text, section: sampleFact.section, kind: sampleFact.kind,
+      confidence: 0.5, sessions: [], first: sampleFact.first, last: 'not-a-date', evidence: null,
+    },
+  },
+};
+fs.writeFileSync(ourIndex, validIndex);
+fs.writeFileSync(theirIndex, JSON.stringify(malformedPending));
+r = laptop.run(['merge-driver', baseIndex, ourIndex, theirIndex, 'identity.index.json']);
+check('invalid pending metadata and timestamps stop the merge',
+  r.status === 1 && fs.readFileSync(ourIndex, 'utf8') === validIndex, r.stderr);
+
+fs.writeFileSync(ourIndex, validIndex);
+fs.writeFileSync(theirIndex, JSON.stringify({ version: 99, facts: {}, pending: {}, tombstones: {} }));
+r = laptop.run(['merge-driver', baseIndex, ourIndex, theirIndex, 'identity.index.json']);
+check('an unknown index version is not merged under unsupported semantics',
+  r.status === 1 && fs.readFileSync(ourIndex, 'utf8') === validIndex, r.stderr);
+
 const fresh = machine('fresh');
 r = fresh.run(['sync']);
 check('sync before setup does not crash', r.status === 0, (r.stderr || r.stdout).trim());

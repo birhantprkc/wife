@@ -81,6 +81,10 @@ check('enables [features] codex_hooks for pre-v0.124 builds',
   /codex_hooks\s*=\s*true/.test(fs.readFileSync(path.join(sandbox, '.codex', 'config.toml'), 'utf8')));
 check('still writes the AGENTS.md fallback',
   fs.readFileSync(path.join(sandbox, '.codex', 'AGENTS.md'), 'utf8').includes('wife:begin'));
+check('global AGENTS.md includes identity but not the current project memory', (() => {
+  const text = fs.readFileSync(path.join(sandbox, '.codex', 'AGENTS.md'), 'utf8');
+  return /respuestas cortas/i.test(text) && !/force push/i.test(text);
+})());
 
 // Codex payload shape, per its docs
 const codexPayload = (extra) => JSON.stringify({
@@ -135,6 +139,8 @@ check('attach exits 0', r.status === 0, r.stderr);
 check('warns that it does not learn', /injection only/i.test(r.stdout), r.stdout);
 check('writes GEMINI.md',
   fs.readFileSync(path.join(sandbox, '.gemini', 'GEMINI.md'), 'utf8').includes('respuestas cortas'));
+check('global GEMINI.md does not leak the current project memory',
+  !/force push/i.test(fs.readFileSync(path.join(sandbox, '.gemini', 'GEMINI.md'), 'utf8')));
 wife(['remember', 'Trabaja de noche']);
 r = wife(['sync-gemini']);
 check('sync-gemini refreshes it', r.status === 0 &&
@@ -142,7 +148,14 @@ check('sync-gemini refreshes it', r.status === 0 &&
 
 // ---------------------------------------------------------------------------
 section('guards — three agents, three ways to block');
-wife(['guards', '--add', 'Nunca hagas force push', '--blocks', 'git push --force']);
+r = wife(['guards', '--add', 'Nunca hagas force push', '--blocks', 'git push --force']);
+check('adding a guard exits 0', r.status === 0, r.stderr);
+settings = JSON.parse(fs.readFileSync(path.join(sandbox, '.claude', 'settings.json'), 'utf8'));
+check('claude gains PreToolUse immediately when a guard is added', Boolean(settings.hooks.PreToolUse));
+check('codex gains PreToolUse immediately when a guard is added',
+  Boolean(JSON.parse(fs.readFileSync(codexHooksFile, 'utf8')).hooks.PreToolUse));
+check('cursor gains beforeShellExecution immediately when a guard is added',
+  Boolean(JSON.parse(fs.readFileSync(cursorHooksFile, 'utf8')).hooks.beforeShellExecution));
 
 r = wife(['guard'], JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git push --force' }, cwd: repo }));
 let parsed = null;
@@ -173,14 +186,6 @@ r = wife(['guard', '--style', 'cursor'], JSON.stringify({
 try { parsed = JSON.parse(r.stdout); } catch { parsed = null; }
 check('cursor: allows EXPLICITLY (silence is not allow for Cursor)',
   parsed?.permission === 'allow' && parsed?.continue === true, r.stdout.slice(0, 150));
-
-// guards registered → the PreToolUse equivalents appear on re-attach
-wife(['attach', 'codex']);
-wife(['attach', 'cursor']);
-check('codex gains PreToolUse once a guard exists',
-  Boolean(JSON.parse(fs.readFileSync(codexHooksFile, 'utf8')).hooks.PreToolUse));
-check('cursor gains beforeShellExecution once a guard exists',
-  Boolean(JSON.parse(fs.readFileSync(cursorHooksFile, 'utf8')).hooks.beforeShellExecution));
 
 // ---------------------------------------------------------------------------
 section('resilience — no agent may be broken by a bad payload');

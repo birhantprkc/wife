@@ -4,28 +4,42 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'wife.js');
 
 let sandbox, repo;
 beforeEach(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'wife-guards-'));
   repo = path.join(sandbox, 'repo');
-  fs.mkdirSync(repo, { recursive: true });
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
   process.env.WIFE_HOME = path.join(sandbox, '.wife');
   process.env.CLAUDE_CONFIG_DIR = path.join(sandbox, '.claude');
+  process.env.CODEX_HOME = path.join(sandbox, '.codex');
+  process.env.CURSOR_HOME = path.join(sandbox, '.cursor-home');
 });
 afterEach(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
   delete process.env.WIFE_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CODEX_HOME;
+  delete process.env.CURSOR_HOME;
 });
 
 const { proposals, evaluate, addGuard, loadGuards, removeGuard, activeGuards } = await import('../src/core/guards.js');
 const { wifeHooks, attachClaude, claudeStatus } = await import('../src/agents/claude.js');
+const { attachCodex, codexStatus } = await import('../src/agents/codex.js');
+const { attachCursor, cursorStatus } = await import('../src/agents/cursor.js');
 
 const fact = (text) => ({ id: text, text });
 const guardFor = (text) => proposals([fact(text)])[0]?.guard;
 const bash = (command, cwd = repo) => ({ tool_name: 'Bash', tool_input: { command }, cwd });
 const edit = (file_path) => ({ tool_name: 'Edit', tool_input: { file_path }, cwd: repo });
+const wife = (args) => spawnSync(process.execPath, [BIN, ...args], {
+  cwd: repo,
+  env: { ...process.env, WIFE_NO_COLOR: '1', NO_COLOR: '1' },
+  encoding: 'utf8',
+});
 
 function gitRepoOnBranch(branch) {
   spawnSync('git', ['init', '-b', branch, repo], { encoding: 'utf8' });
@@ -152,8 +166,13 @@ describe('branch guards — the command alone is not enough', () => {
   });
 
   test('outside a git repo nothing is blocked', () => {
+    const outside = path.join(sandbox, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    // An invalid local gitdir marker makes Git stop discovery here, keeping the
+    // test hermetic even if a developer has versioned their whole home folder.
+    fs.writeFileSync(path.join(outside, '.git'), 'gitdir: missing-repository\n');
     const g = guardFor('Nunca hagas commit directo a main');
-    assert.equal(evaluate(bash('git commit -m "x"', sandbox), [g]).deny, false,
+    assert.equal(evaluate(bash('git commit -m "x"', outside), [g]).deny, false,
       'with no branch there is no basis to block');
   });
 });
@@ -224,6 +243,24 @@ describe('opt-in — nothing is enforced without being asked for', () => {
     const existing = new Set(loadGuards().guards.map((x) => x.id));
     assert.equal(again.filter((p) => !existing.has(p.guard.id)).length, 0);
   });
+
+  test('manual guards reject credentials without persisting or echoing them', () => {
+    const secret = 'ghp_abcdefghijklmnopqrstuvwxyz1234';
+    const result = wife(['guards', '--add', `Never expose ${secret}`, '--blocks', 'git push --force']);
+    assert.equal(result.status, 1);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(secret));
+    assert.equal(activeGuards().length, 0);
+    assert.equal(fs.existsSync(path.join(process.env.WIFE_HOME, 'journal.jsonl')), false);
+  });
+
+  test('manual guards also reject configured denyPatterns in either field', () => {
+    fs.mkdirSync(process.env.WIFE_HOME, { recursive: true });
+    fs.writeFileSync(path.join(process.env.WIFE_HOME, 'config.json'), JSON.stringify({ denyPatterns: ['acme-codename'] }));
+    const result = wife(['guards', '--add', 'Never deploy this target', '--blocks', 'deploy acme-codename']);
+    assert.equal(result.status, 1);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /acme-codename/i);
+    assert.equal(activeGuards().length, 0);
+  });
 });
 
 describe('hook registration', () => {
@@ -245,5 +282,26 @@ describe('hook registration', () => {
     attachClaude();
     assert.deepEqual(claudeStatus().events.sort(),
       ['PreToolUse', 'SessionEnd', 'SessionStart', 'UserPromptSubmit']);
+  });
+
+  test('adding and removing a guard refreshes every integration already attached', () => {
+    attachClaude();
+    attachCodex({ cwd: repo });
+    attachCursor({ project: true, cwd: repo });
+    assert.equal(claudeStatus().events.includes('PreToolUse'), false);
+    assert.equal(codexStatus().events.includes('PreToolUse'), false);
+    assert.equal(cursorStatus({ project: true, cwd: repo }).events.includes('beforeShellExecution'), false);
+
+    const added = wife(['guards', '--add', 'Nunca hagas force push', '--blocks', 'git push --force']);
+    assert.equal(added.status, 0, added.stderr);
+    assert.equal(claudeStatus().events.includes('PreToolUse'), true);
+    assert.equal(codexStatus().events.includes('PreToolUse'), true);
+    assert.equal(cursorStatus({ project: true, cwd: repo }).events.includes('beforeShellExecution'), true);
+
+    const removed = wife(['guards', '--off', 'force push']);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(claudeStatus().events.includes('PreToolUse'), false);
+    assert.equal(codexStatus().events.includes('PreToolUse'), false);
+    assert.equal(cursorStatus({ project: true, cwd: repo }).events.includes('beforeShellExecution'), false);
   });
 });

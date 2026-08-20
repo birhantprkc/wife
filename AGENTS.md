@@ -22,8 +22,9 @@ for sudo — the usual cause is that npm's global bin directory is not on PATH.
 
 ## If the user wants to change something
 
-Run `npm run check` before and after. It is 90 unit tests plus a 77-check
-end-to-end run and it must stay green. New behaviour needs a new test.
+Run `npm run check` before and after. It covers the unit, end-to-end,
+multi-machine sync and multi-agent suites, and it must stay green. New
+behaviour needs a new test.
 
 Where things live:
 

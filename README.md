@@ -590,7 +590,7 @@ Spanish and English out of the box, and it writes each fact back in the language
 npm run check
 ```
 
-**179 unit tests**, a **77-check end-to-end run**, a **63-check multi-agent run**, and a **38-check multi-machine
+**247 unit tests**, a **78-check end-to-end run**, a **67-check multi-agent run**, and a **55-check multi-machine
 convergence run** using real git that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
 
 - a credential pasted into a prompt never appears anywhere under `~/.wife`
@@ -601,7 +601,7 @@ convergence run** using real git that spawns the real CLI and feeds it the exact
 - every hook command exits 0 given no stdin, garbage stdin, a null prompt, a 500 KB prompt, or a session id of `../../../etc/passwd`
 - a corrupt index file is quarantined and recovered from instead of crashing
 - a buffer from a session that never ended is picked up at the next start
-- the CLI works through the symlink `npm link` installs, not just as a direct file
+- the CLI works through npm's real platform launcher (`wife` on POSIX and `wife.cmd` on Windows), not just as a direct file
 - a credential inside an imported CLAUDE.md is dropped, underscores and all
 - a fact gone quiet for months stops being injected but stays in the file
 - saying a dormant fact again revives it, back to its original section

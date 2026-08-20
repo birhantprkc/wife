@@ -2,12 +2,30 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { findProjectRoot } from '../util/paths.js';
-import { readJSON, writeJSON, writeAtomic, readText, exists, ensureDir, removeFile } from '../util/fsx.js';
+import { inspectJSON, readJSONStrict, writeJSON, writeAtomic, readText, exists, ensureDir, removeFile } from '../util/fsx.js';
 import { compileContext } from '../core/compile.js';
 import { activeGuards } from '../core/guards.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BIN = path.resolve(HERE, '..', '..', 'bin', 'wife.js');
+
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function schemaProblem(value) {
+  if (!isRecord(value)) return 'expected the document root to be an object';
+  if (value.hooks !== undefined && !isRecord(value.hooks)) return 'expected "hooks" to be an object';
+  for (const [event, handlers] of Object.entries(value.hooks || {})) {
+    if (!Array.isArray(handlers)) return `expected hooks.${event} to be an array`;
+  }
+  return null;
+}
+
+function readHooksDocument(file) {
+  const value = readJSONStrict(file, null);
+  const problem = schemaProblem(value);
+  if (problem) throw new Error(`Invalid JSON structure in ${file}: ${problem}`);
+  return value;
+}
 
 /**
  * Cursor integration.
@@ -57,21 +75,31 @@ export function cursorHooks(nodeBin = process.execPath) {
 }
 
 export function isWifeHandler(handler) {
-  return typeof handler?.command === 'string' && /wife\.js/.test(handler.command);
+  return typeof handler?.command === 'string' && /(?:^|[\\/])wife\.js(?:$|["'\s])/.test(handler.command);
+}
+
+function removeWifeHooks(hooks) {
+  for (const [event, handlers] of Object.entries(hooks || {})) {
+    if (!Array.isArray(handlers)) continue;
+    const kept = handlers.filter((h) => !isWifeHandler(h));
+    if (kept.length) hooks[event] = kept;
+    else delete hooks[event];
+  }
 }
 
 export function attachCursor({ project = true, cwd = process.cwd(), nodeBin = process.execPath } = {}) {
   const file = hooksPath({ project, cwd });
   ensureDir(path.dirname(file));
-  const existing = readJSON(file, null) || { version: 1, hooks: {} };
+  const existing = exists(file) ? readHooksDocument(file) : { version: 1, hooks: {} };
   existing.version = existing.version || 1;
-  existing.hooks = existing.hooks && typeof existing.hooks === 'object' ? existing.hooks : {};
+  existing.hooks = existing.hooks || {};
+  removeWifeHooks(existing.hooks);
 
   const wanted = cursorHooks(nodeBin);
   const events = [];
   for (const [event, handlers] of Object.entries(wanted)) {
     const prior = Array.isArray(existing.hooks[event]) ? existing.hooks[event] : [];
-    existing.hooks[event] = [...prior.filter((h) => !isWifeHandler(h)), ...handlers];
+    existing.hooks[event] = [...prior, ...handlers];
     events.push(event);
   }
   writeJSON(file, existing);
@@ -82,7 +110,7 @@ export function attachCursor({ project = true, cwd = process.cwd(), nodeBin = pr
 export function detachCursor({ project = true, cwd = process.cwd() } = {}) {
   const file = hooksPath({ project, cwd });
   let removed = 0;
-  const existing = readJSON(file, null);
+  const existing = exists(file) ? readHooksDocument(file) : null;
   if (existing?.hooks) {
     for (const [event, handlers] of Object.entries(existing.hooks)) {
       if (!Array.isArray(handlers)) continue;
@@ -100,11 +128,13 @@ export function detachCursor({ project = true, cwd = process.cwd() } = {}) {
 
 export function cursorStatus({ project = true, cwd = process.cwd() } = {}) {
   const file = hooksPath({ project, cwd });
-  const existing = readJSON(file, null);
+  const inspected = inspectJSON(file, null);
+  const invalid = Boolean(inspected.error || (!inspected.missing && schemaProblem(inspected.value)));
+  const existing = invalid ? null : inspected.value;
   const events = existing?.hooks
     ? Object.entries(existing.hooks).filter(([, h]) => Array.isArray(h) && h.some(isWifeHandler)).map(([e]) => e)
     : [];
-  return { file, attached: events.length > 0, events, rules: exists(rulesPath(cwd)) };
+  return { file, attached: events.length > 0, events, rules: exists(rulesPath(cwd)), invalid };
 }
 
 /**

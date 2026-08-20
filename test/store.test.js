@@ -21,6 +21,7 @@ const { harvestSession } = await import('../src/core/harvest.js');
 const { appendPrompt } = await import('../src/core/session.js');
 const { compileContext } = await import('../src/core/compile.js');
 const { loadConfig } = await import('../src/core/config.js');
+const { mergeIndex } = await import('../src/core/merge.js');
 
 function newStore(overrides = {}) {
   return new Store({
@@ -90,6 +91,29 @@ describe('hand editing is first-class', () => {
     assert.equal(after.seen, seenBefore, 'seen count must survive');
     assert.equal(after.section, 'Who', 'the section shown in the file wins');
   });
+
+  test('a hand deletion creates a tombstone that can cross a git merge', () => {
+    const store = newStore();
+    const { id } = store.upsert({ text: 'Prefers short answers', section: 'Preferences' });
+    store.save();
+
+    fs.writeFileSync(path.join(sandbox, 'identity.md'), '# t\n\n## Preferences\n');
+    const reloaded = newStore();
+    assert.equal(reloaded.facts().length, 0);
+    assert.match(reloaded.index.tombstones[id].reason, /removed by hand/i);
+    reloaded.save();
+    assert.ok(JSON.parse(fs.readFileSync(path.join(sandbox, 'identity.index.json'), 'utf8')).tombstones[id]);
+  });
+
+  test('remembering a deliberately deleted fact clears its tombstone', () => {
+    const store = newStore();
+    const { id } = store.upsert({ text: 'Prefers short answers', section: 'Preferences' });
+    store.remove(id);
+    assert.ok(store.index.tombstones[id]);
+    store.upsert({ text: 'Prefers short answers', section: 'Preferences' });
+    assert.equal(store.index.tombstones[id], undefined);
+    assert.ok(store.get(id));
+  });
 });
 
 describe('reconciliation', () => {
@@ -153,6 +177,50 @@ describe('the promotion gate', () => {
   });
 });
 
+describe('last-line credential defence', () => {
+  test('Store rejects secrets in text and evidence without touching any sidecar or journal', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz1234';
+    const store = newStore();
+    const direct = store.upsert({ text: `Production token ${token}`, section: 'Who' });
+    const staged = store.stage({
+      text: 'Uses the production deployment account', section: 'Who', kind: 'fact',
+      confidence: 0.8, sessionId: 's1', evidence: `Authorization: Bearer ${token}abcdefghijklmnop`,
+    });
+    store.save({ force: true });
+
+    assert.equal(direct.action, 'unchanged');
+    assert.equal(staged.action, 'unchanged');
+    assert.match(direct.reason, /credential/);
+    assert.equal(store.facts().length, 0);
+    assert.equal(store.pending().length, 0);
+    const disk = fs.readdirSync(sandbox, { recursive: true })
+      .filter((file) => typeof file === 'string' && fs.statSync(path.join(sandbox, file)).isFile())
+      .map((file) => fs.readFileSync(path.join(sandbox, file), 'utf8'))
+      .join('\n');
+    assert.ok(!disk.includes(token), 'Store leaked a rejected credential to disk');
+  });
+
+  test('unsafe hand-edited bullets and sections are removed before injection', () => {
+    const password = 'hunter2000xyz';
+    const clientSecret = 'abc123xyz789';
+    fs.writeFileSync(path.join(sandbox, 'identity.md'), [
+      '# test', '', '## Who',
+      `- password is ${password}`,
+      '- Prefers short answers', '',
+      `## client secret = ${clientSecret}`,
+      '- Uses pnpm', '',
+    ].join('\n'));
+
+    const store = newStore();
+    assert.deepEqual(store.facts().map((fact) => fact.text), ['Prefers short answers']);
+    assert.doesNotMatch(store.render(), new RegExp(`${password}|${clientSecret}`));
+    store.save();
+    const disk = fs.readFileSync(path.join(sandbox, 'identity.md'), 'utf8') +
+      fs.readFileSync(path.join(sandbox, 'identity.index.json'), 'utf8');
+    assert.doesNotMatch(disk, new RegExp(`${password}|${clientSecret}`));
+  });
+});
+
 describe('the token budget', () => {
   test('the lowest-scoring fact is evicted first', () => {
     const store = newStore();
@@ -188,6 +256,78 @@ describe('the token budget', () => {
   test('an empty store prunes to nothing without looping', () => {
     const store = newStore();
     assert.deepEqual(store.prune(0), []);
+  });
+
+  test('more than 500 facts are still pruned all the way to the ceiling', () => {
+    const store = newStore();
+    const now = new Date().toISOString();
+    for (let i = 0; i < 600; i++) {
+      const id = `fact-${i}`;
+      store.index.facts[id] = {
+        text: `Independent remembered item number ${i}`,
+        section: 'Who', confidence: 0.5, seen: 1, sessions: [],
+        first: now, last: now, pinned: false,
+      };
+      store.order.push(id);
+    }
+    const evicted = store.prune(0);
+    assert.equal(evicted.length, 600);
+    assert.equal(store.tokens(), 0);
+    assert.equal(store.facts().length, 0);
+  });
+
+  test('automatic pruning does not create a deliberate-deletion tombstone', () => {
+    const store = newStore();
+    const { id } = store.upsert({ text: 'A low scoring remembered item', section: 'Who' });
+    store.prune(0);
+    assert.equal(store.index.tombstones[id], undefined);
+  });
+});
+
+describe('semantic index merge invariants', () => {
+  const fact = (overrides = {}) => ({
+    text: 'Prefers short answers', section: 'Who', kind: 'fact', source: 'capture',
+    confidence: 0.8, seen: 1, sessions: ['s1'], first: '2026-01-01T00:00:00.000Z',
+    last: '2026-01-01T00:00:00.000Z', pinned: false, dormant: false, evidence: null,
+    ...overrides,
+  });
+  const index = (facts, tombstones = {}, overrides = {}) => ({
+    version: 2, facts, pending: {}, tombstones, updated: '2026-01-01T00:00:00.000Z', ...overrides,
+  });
+
+  test('a reinforcement survives automatic pruning, but not an explicit forget', () => {
+    const baseFact = fact();
+    const base = index({ f: baseFact });
+    const reinforced = index({ f: fact({ seen: 2, sessions: ['s1', 's2'], last: '2026-02-01T00:00:00.000Z' }) });
+    const pruned = index({});
+    assert.ok(mergeIndex(base, pruned, reinforced).index.facts.f,
+      'automatic pruning erased a fact reinforced on the other machine');
+
+    const forgotten = index({}, { f: { at: '2026-02-02T00:00:00.000Z', reason: 'user requested' } });
+    const merged = mergeIndex(base, forgotten, reinforced).index;
+    assert.equal(merged.facts.f, undefined);
+    assert.ok(merged.tombstones.f, 'the deliberate forget must remain durable');
+  });
+
+  test('an unpin and manual section move beat a stale reinforced copy', () => {
+    const baseFact = fact({ pinned: true });
+    const base = index({ f: baseFact });
+    const edited = index({ f: fact({ pinned: false, section: 'Preferences' }) });
+    const reinforced = index({ f: fact({ pinned: true, seen: 2, last: '2026-02-01T00:00:00.000Z' }) });
+    const merged = mergeIndex(base, edited, reinforced).index.facts.f;
+    assert.equal(merged.pinned, false);
+    assert.equal(merged.section, 'Preferences');
+  });
+
+  test('awake wins over dormant with a coherent section in either operand order', () => {
+    const awake = fact({ section: 'Preferences' });
+    const dormant = fact({ section: 'Dormant', dormant: true, homeSection: 'Preferences' });
+    const base = index({ f: awake });
+    for (const [ours, theirs] of [[dormant, awake], [awake, dormant]]) {
+      const merged = mergeIndex(base, index({ f: ours }), index({ f: theirs })).index.facts.f;
+      assert.equal(merged.dormant, false);
+      assert.equal(merged.section, 'Preferences');
+    }
   });
 });
 

@@ -3,8 +3,41 @@ import { loadConfig } from '../core/config.js';
 import { openIdentity, openProject } from '../core/memory.js';
 import { proposals, loadGuards, activeGuards, addGuard, removeGuard, saveGuards, evaluate } from '../core/guards.js';
 import { attachClaude, claudeStatus } from '../agents/claude.js';
+import { attachCodex, codexStatus } from '../agents/codex.js';
+import { attachCursor, cursorStatus } from '../agents/cursor.js';
+import { detectSecret } from '../core/redact.js';
 import { readStdin, say, ok, warn, fail, info, c, heading, bullet, blank, plural } from '../util/out.js';
 import { factId } from '../util/text.js';
+
+/** Keep conditional guard hooks in sync in every integration already attached. */
+function refreshAttachedGuardHooks() {
+  const changes = [];
+  const integrations = [
+    { label: 'Claude Code', event: 'PreToolUse', status: claudeStatus, attach: attachClaude },
+    { label: 'Codex', event: 'PreToolUse', status: codexStatus, attach: attachCodex },
+    { label: 'Cursor', event: 'beforeShellExecution', status: cursorStatus, attach: attachCursor },
+  ];
+
+  for (const integration of integrations) {
+    for (const project of [false, true]) {
+      const before = integration.status({ project });
+      if (!before.attached) continue;
+      const hadGuardHook = before.events.includes(integration.event);
+      const after = integration.attach({ project });
+      const hasGuardHook = after.events.includes(integration.event);
+      if (hadGuardHook !== hasGuardHook) {
+        changes.push({ ...integration, project, enabled: hasGuardHook });
+      }
+    }
+  }
+  return changes;
+}
+
+function reportEnabledGuardHooks(changes) {
+  for (const change of changes.filter((x) => x.enabled)) {
+    ok(`Registered the ${change.event} hook in ${change.label}${change.project ? ' (project)' : ''}`);
+  }
+}
 
 /**
  * `wife guard` — the PreToolUse hook runner.
@@ -133,11 +166,8 @@ export async function cmdHarden(args) {
     return 0;
   }
 
-  // A guard is useless until the PreToolUse hook exists to call it.
-  if (!claudeStatus().events.includes('PreToolUse')) {
-    attachClaude();
-    ok('Registered the PreToolUse hook in Claude Code');
-  }
+  // A guard is useless until each attached agent has a hook that calls it.
+  reportEnabledGuardHooks(refreshAttachedGuardHooks());
   ok(`${plural(added, 'guard')} now enforced.`);
   say(c.gray('  Restart your agent for the hook to load.'));
   say(c.gray('  The rules stay in memory too: the guard stops the action, the memory stops the attempt.'));
@@ -177,6 +207,13 @@ export function cmdGuards(args) {
       say(c.gray('        wife guards --add "No commits en release" --blocks "git commit" --on-branch release'));
       return 1;
     }
+    const config = loadConfig();
+    if (detectSecret(rule, config.denyPatterns) || detectSecret(blocks, config.denyPatterns)) {
+      // Do not repeat the rejected input: even an error message must not leak a
+      // credential into shell history, CI logs, or an agent transcript.
+      fail('Refusing to create a guard from text that may contain a credential.');
+      return 1;
+    }
     const tool = args.tool || (args.onBranch ? 'Bash' : 'Bash');
     const guard = {
       id: factId(`custom:${blocks}:${args.onBranch || ''}:${tool}`),
@@ -195,10 +232,7 @@ export function cmdGuards(args) {
     ok(`Enforcing: "${rule}"`);
     say(c.gray(`  blocks   ${guard.pattern}`));
     if (guard.branches) say(c.gray(`  only on  ${guard.branches.join(', ')}`));
-    if (!claudeStatus().events.includes('PreToolUse')) {
-      attachClaude();
-      ok('Registered the PreToolUse hook in Claude Code');
-    }
+    reportEnabledGuardHooks(refreshAttachedGuardHooks());
     say(c.gray('  Restart your agent for it to take effect. Check it with `wife guards --test "<command>"`.'));
     return 0;
   }
@@ -226,7 +260,12 @@ export function cmdGuards(args) {
   if (args.off) {
     const target = typeof args.off === 'string' ? args.off : args._[0];
     if (!target) { fail('Usage: wife guards --off "<rule or id>"'); return 1; }
-    if (removeGuard(target)) { ok(`Stopped enforcing: "${target}"`); say(c.gray('  It stays in memory as context.')); return 0; }
+    if (removeGuard(target)) {
+      refreshAttachedGuardHooks();
+      ok(`Stopped enforcing: "${target}"`);
+      say(c.gray('  It stays in memory as context.'));
+      return 0;
+    }
     warn(`No guard matches "${target}".`);
     return 1;
   }
@@ -237,6 +276,7 @@ export function cmdGuards(args) {
     if (!g) { warn(`No guard matches "${target}".`); return 1; }
     g.enabled = Boolean(args.enable);
     saveGuards(state);
+    refreshAttachedGuardHooks();
     ok(`${g.enabled ? 'Enabled' : 'Paused'}: "${g.from}"`);
     return 0;
   }

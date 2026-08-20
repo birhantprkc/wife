@@ -19,10 +19,11 @@
     "node": ">=18.17"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/agents.test.js test/concurrency.test.js test/curation.test.js test/extract.test.js test/guards.test.js test/session-security.test.js test/store.test.js",
     "e2e": "node test/e2e.mjs",
-    "check": "node --test test/*.test.js && node test/e2e.mjs && node test/sync.mjs && node test/multiagent.mjs",
-    "sync-test": "node test/sync.mjs"
+    "sync-test": "node test/sync.mjs",
+    "multiagent-test": "node test/multiagent.mjs",
+    "check": "npm test && npm run e2e && npm run sync-test && npm run multiagent-test"
   },
   "keywords": [
     "claude-code",

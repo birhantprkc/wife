@@ -1,12 +1,35 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codexHome, findProjectRoot } from '../util/paths.js';
-import { readText, readJSON, writeJSON, writeAtomic, exists, ensureDir } from '../util/fsx.js';
+import { readText, inspectJSON, readJSONStrict, writeJSON, writeAtomic, exists, ensureDir } from '../util/fsx.js';
+import { hasManagedBlock, removeManagedBlock, upsertManagedBlock } from '../util/managed.js';
 import { compileContext } from '../core/compile.js';
 import { activeGuards } from '../core/guards.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BIN = path.resolve(HERE, '..', '..', 'bin', 'wife.js');
+
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function schemaProblem(value) {
+  if (!isRecord(value)) return 'expected the document root to be an object';
+  if (value.hooks !== undefined && !isRecord(value.hooks)) return 'expected "hooks" to be an object';
+  for (const [event, groups] of Object.entries(value.hooks || {})) {
+    if (!Array.isArray(groups)) return `expected hooks.${event} to be an array`;
+    for (let i = 0; i < groups.length; i++) {
+      if (!isRecord(groups[i])) return `expected hooks.${event}[${i}] to be an object`;
+      if (!Array.isArray(groups[i].hooks)) return `expected hooks.${event}[${i}].hooks to be an array`;
+    }
+  }
+  return null;
+}
+
+function readHooksDocument(file) {
+  const value = readJSONStrict(file, null);
+  const problem = schemaProblem(value);
+  if (problem) throw new Error(`Invalid JSON structure in ${file}: ${problem}`);
+  return value;
+}
 
 export const BEGIN = '<!-- wife:begin — managed block, edited by `wife sync-codex`. Your own text is safe outside it. -->';
 export const END = '<!-- wife:end -->';
@@ -54,7 +77,18 @@ const hasGuards = () => { try { return activeGuards().length > 0; } catch { retu
 
 export function isWifeHandler(handler) {
   const c = typeof handler?.command === 'string' ? handler.command : '';
-  return /wife\.js/.test(c);
+  return /(?:^|[\\/])wife\.js(?:$|["'\s])/.test(c);
+}
+
+function removeWifeHooks(hooks) {
+  for (const [event, groups] of Object.entries(hooks || {})) {
+    if (!Array.isArray(groups)) continue;
+    const cleaned = groups
+      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isWifeHandler(h)) }))
+      .filter((g) => (g.hooks || []).length > 0);
+    if (cleaned.length) hooks[event] = cleaned;
+    else delete hooks[event];
+  }
 }
 
 /**
@@ -78,34 +112,34 @@ function ensureFeatureFlag() {
   return true;
 }
 
-export function attachCodex({ project = false, cwd = process.cwd(), nodeBin = process.execPath, includeProject = true } = {}) {
+export function attachCodex({ project = false, cwd = process.cwd(), nodeBin = process.execPath, includeProject = project } = {}) {
   const file = hooksPath({ project, cwd });
-  ensureDir(path.dirname(file));
-  const existing = readJSON(file, null) || { version: 1, hooks: {} };
-  existing.hooks = existing.hooks && typeof existing.hooks === 'object' ? existing.hooks : {};
+  const existing = exists(file) ? readHooksDocument(file) : { version: 1, hooks: {} };
+  const preparedFallback = prepareAttachCodexBlock({ project, cwd, includeProject });
+  existing.hooks = existing.hooks || {};
+  removeWifeHooks(existing.hooks);
 
   const wanted = codexHooks(nodeBin);
   const events = [];
   for (const [event, groups] of Object.entries(wanted)) {
     const prior = Array.isArray(existing.hooks[event]) ? existing.hooks[event] : [];
-    const cleaned = prior
-      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isWifeHandler(h)) }))
-      .filter((g) => (g.hooks || []).length > 0);
-    existing.hooks[event] = [...cleaned, ...groups];
+    existing.hooks[event] = [...prior, ...groups];
     events.push(event);
   }
   existing.version = existing.version || 1;
+  ensureDir(path.dirname(file));
   writeJSON(file, existing);
 
   const flagged = ensureFeatureFlag();
-  const fallback = attachCodexBlock({ project, cwd, includeProject });
+  const fallback = commitAttachCodexBlock(preparedFallback);
   return { file, events, flagged, fallback: fallback.file };
 }
 
 export function detachCodex({ project = false, cwd = process.cwd() } = {}) {
   const file = hooksPath({ project, cwd });
   let removed = 0;
-  const existing = readJSON(file, null);
+  const existing = exists(file) ? readHooksDocument(file) : null;
+  const preparedBlock = prepareDetachCodexBlock({ project, cwd });
   if (existing?.hooks) {
     for (const [event, groups] of Object.entries(existing.hooks)) {
       if (!Array.isArray(groups)) continue;
@@ -120,20 +154,28 @@ export function detachCodex({ project = false, cwd = process.cwd() } = {}) {
     }
     writeJSON(file, existing);
   }
-  const block = detachCodexBlock({ project, cwd });
+  const block = commitDetachCodexBlock(preparedBlock);
   return { file, removed, missing: !existing, block: block.file };
 }
 
 export function codexStatus({ project = false, cwd = process.cwd() } = {}) {
   const file = hooksPath({ project, cwd });
-  const existing = readJSON(file, null);
+  const inspected = inspectJSON(file, null);
+  const invalid = Boolean(inspected.error || (!inspected.missing && schemaProblem(inspected.value)));
+  const existing = invalid ? null : inspected.value;
   const events = existing?.hooks
     ? Object.entries(existing.hooks)
         .filter(([, g]) => Array.isArray(g) && g.some((x) => (x.hooks || []).some(isWifeHandler)))
         .map(([e]) => e)
     : [];
   const md = readText(agentsPath({ project, cwd }), null);
-  return { file, attached: events.length > 0, events, blockOnly: events.length === 0 && Boolean(md && md.includes(BEGIN)) };
+  return {
+    file,
+    attached: events.length > 0,
+    events,
+    blockOnly: events.length === 0 && Boolean(md && hasManagedBlock(md)),
+    invalid,
+  };
 }
 
 /* ---- AGENTS.md fallback, for builds older than the hook engine ---- */
@@ -147,33 +189,38 @@ export function renderBlock({ cwd = process.cwd(), includeProject = true } = {})
 }
 
 export function upsertBlock(existing, block) {
-  const current = existing || '';
-  const start = current.indexOf(BEGIN);
-  const end = current.indexOf(END);
-  if (start !== -1 && end !== -1 && end > start) {
-    return `${current.slice(0, start)}${block}${current.slice(end + END.length)}`;
-  }
-  const prefix = current.trim() ? `${current.trimEnd()}\n\n` : '';
-  return `${prefix}${block}\n`;
+  return upsertManagedBlock(existing, block);
 }
 
-export function attachCodexBlock({ project = false, cwd = process.cwd(), includeProject = true } = {}) {
+function prepareAttachCodexBlock({ project = false, cwd = process.cwd(), includeProject = project } = {}) {
   const file = agentsPath({ project, cwd });
-  ensureDir(path.dirname(file));
   const existed = exists(file);
   const next = upsertBlock(readText(file, ''), renderBlock({ cwd, includeProject }));
-  writeAtomic(file, next.endsWith('\n') ? next : `${next}\n`);
-  return { file, existed, bytes: next.length };
+  return { file, existed, next };
+}
+
+function commitAttachCodexBlock(prepared) {
+  ensureDir(path.dirname(prepared.file));
+  writeAtomic(prepared.file, prepared.next.endsWith('\n') ? prepared.next : `${prepared.next}\n`);
+  return { file: prepared.file, existed: prepared.existed, bytes: prepared.next.length };
+}
+
+export function attachCodexBlock({ project = false, cwd = process.cwd(), includeProject = project } = {}) {
+  return commitAttachCodexBlock(prepareAttachCodexBlock({ project, cwd, includeProject }));
+}
+
+function prepareDetachCodexBlock({ project = false, cwd = process.cwd() } = {}) {
+  const file = agentsPath({ project, cwd });
+  if (!exists(file)) return { file, removed: false, missing: true, write: false };
+  const result = removeManagedBlock(readText(file, ''));
+  return { file, removed: result.removed, missing: false, write: result.removed, next: result.text };
+}
+
+function commitDetachCodexBlock(prepared) {
+  if (prepared.write) writeAtomic(prepared.file, prepared.next.trim() ? prepared.next : '');
+  return { file: prepared.file, removed: prepared.removed, missing: prepared.missing };
 }
 
 export function detachCodexBlock({ project = false, cwd = process.cwd() } = {}) {
-  const file = agentsPath({ project, cwd });
-  if (!exists(file)) return { file, removed: false, missing: true };
-  const current = readText(file, '');
-  const start = current.indexOf(BEGIN);
-  const end = current.indexOf(END);
-  if (start === -1 || end === -1 || end < start) return { file, removed: false, missing: false };
-  const next = `${current.slice(0, start).trimEnd()}\n${current.slice(end + END.length).trimStart()}`;
-  writeAtomic(file, next.trim() ? next : '');
-  return { file, removed: true, missing: false };
+  return commitDetachCodexBlock(prepareDetachCodexBlock({ project, cwd }));
 }

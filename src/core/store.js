@@ -1,8 +1,10 @@
 import { readText, readJSON, writeAtomic, writeJSON } from '../util/fsx.js';
 import { factId, estimateTokens, similarity, refines, contradicts, tidy } from '../util/text.js';
 import { record } from './journal.js';
+import { detectSecret } from './redact.js';
 
 const DAY_MS = 86_400_000;
+const INDEX_VERSION = 2;
 
 /**
  * Reserved section name. Facts here are not injected into the agent, but stay
@@ -27,7 +29,7 @@ export const DORMANT = 'Dormant';
  * forgotten on the next load, no command required.
  */
 export class Store {
-  constructor({ mdPath, indexPath, sections, title, header, halfLife = 90, scope = 'user' }) {
+  constructor({ mdPath, indexPath, sections, title, header, halfLife = 90, scope = 'user', denyPatterns = [] }) {
     this.mdPath = mdPath;
     this.indexPath = indexPath;
     this.configuredSections = sections;
@@ -35,7 +37,8 @@ export class Store {
     this.header = header;
     this.halfLife = halfLife;
     this.scope = scope;
-    this.index = { version: 1, facts: {}, pending: {}, updated: null };
+    this.denyPatterns = Array.isArray(denyPatterns) ? denyPatterns : [];
+    this.index = { version: INDEX_VERSION, facts: {}, pending: {}, tombstones: {}, updated: null };
     this.order = [];
     this.dirty = false;
   }
@@ -45,14 +48,45 @@ export class Store {
     const stored = readJSON(this.indexPath, null);
     if (stored && typeof stored === 'object') {
       this.index = {
-        version: stored.version || 1,
+        version: Math.max(stored.version || 1, INDEX_VERSION),
         facts: stored.facts && typeof stored.facts === 'object' ? stored.facts : {},
         pending: stored.pending && typeof stored.pending === 'object' ? stored.pending : {},
+        tombstones: stored.tombstones && typeof stored.tombstones === 'object' ? stored.tombstones : {},
         updated: stored.updated || null,
       };
+      if ((stored.version || 1) < INDEX_VERSION) this.dirty = true;
     }
+    this.#screenIndex();
     this.#syncFromMarkdown();
     return this;
+  }
+
+  #containsSecret(...values) {
+    for (const value of values) {
+      const match = detectSecret(value, this.denyPatterns);
+      if (match) return match;
+    }
+    return null;
+  }
+
+  /** Remove unsafe legacy/synced sidecar entries before they can be injected. */
+  #screenIndex() {
+    for (const [id, fact] of Object.entries(this.index.facts)) {
+      if (!this.#containsSecret(fact?.text, fact?.section, fact?.evidence)) continue;
+      delete this.index.facts[id];
+      this.#rememberDeletion(id, 'credential removed from memory');
+      this.dirty = true;
+    }
+    for (const [id, entry] of Object.entries(this.index.pending)) {
+      if (!this.#containsSecret(entry?.text, entry?.section, entry?.evidence)) continue;
+      delete this.index.pending[id];
+      this.dirty = true;
+    }
+    for (const tombstone of Object.values(this.index.tombstones)) {
+      if (!this.#containsSecret(tombstone?.reason)) continue;
+      tombstone.reason = 'deleted';
+      this.dirty = true;
+    }
   }
 
   /**
@@ -77,11 +111,27 @@ export class Store {
 
     for (const { section, text } of parsed) {
       const id = factId(text);
+      if (this.#containsSecret(text, section)) {
+        // Hand edits are authoritative, but they are still candidates for
+        // injection and sidecar storage. Drop unsafe bullets without journaling
+        // their contents; a later save also removes them from managed memory.
+        if (this.index.facts[id]) {
+          delete this.index.facts[id];
+          this.#rememberDeletion(id, 'credential removed from hand-edited file', now);
+        }
+        if (this.index.pending[id]) delete this.index.pending[id];
+        this.dirty = true;
+        continue;
+      }
       if (seen.has(id)) continue; // duplicate bullet typed by hand
       seen.add(id);
       order.push(id);
       const existing = this.index.facts[id];
       if (existing) {
+        if (Object.hasOwn(this.index.tombstones, id)) {
+          delete this.index.tombstones[id];
+          this.dirty = true;
+        }
         // Keep metadata, but the section shown in the file wins — including a
         // hand-edited move into or out of Dormant.
         if (existing.section !== section) {
@@ -95,6 +145,7 @@ export class Store {
           this.dirty = true;
         }
       } else {
+        delete this.index.tombstones[id];
         this.index.facts[id] = {
           text,
           section,
@@ -117,6 +168,7 @@ export class Store {
     for (const id of Object.keys(this.index.facts)) {
       if (!seen.has(id)) {
         const fact = this.index.facts[id];
+        this.#rememberDeletion(id, 'removed by hand from file', now);
         delete this.index.facts[id];
         this.dirty = true;
         record({ event: 'forgotten', scope: this.scope, id, text: fact.text, reason: 'removed by hand from file' });
@@ -124,6 +176,18 @@ export class Store {
     }
 
     this.order = order;
+  }
+
+  /**
+   * Keep deliberate deletions long enough for a three-way git merge to tell
+   * them apart from automatic pruning. The id is sufficient; keeping the text
+   * here would duplicate memory content in another sidecar for no benefit.
+   */
+  #rememberDeletion(id, reason, at = new Date().toISOString()) {
+    this.index.tombstones[id] = {
+      at,
+      reason: detectSecret(reason) ? 'deleted' : String(reason || 'deleted'),
+    };
   }
 
   facts() {
@@ -183,13 +247,18 @@ export class Store {
    *   'reinforced' | 'superseded' | 'added' | 'unchanged'
    */
   upsert({ text, section, kind = 'fact', source = 'capture', confidence = 0.7, sessionId = null, evidence = null, seedSessions = null, seedFirst = null }) {
+    const secret = this.#containsSecret(text, section, evidence);
+    if (secret) return { action: 'unchanged', id: null, reason: `credential:${secret}` };
     const clean = tidy(text);
+    const normalizedSecret = detectSecret(clean, this.denyPatterns);
+    if (normalizedSecret) return { action: 'unchanged', id: null, reason: `credential:${normalizedSecret}` };
     if (!clean) return { action: 'unchanged', id: null };
     const id = factId(clean);
     const now = new Date().toISOString();
 
     const existing = this.index.facts[id];
     if (existing) {
+      delete this.index.tombstones[id];
       const revived = existing.dormant;
       if (revived) {
         // You said it again, so it is current again. Back to where it lived before.
@@ -231,7 +300,9 @@ export class Store {
       }
 
       delete this.index.facts[otherId];
+      this.#rememberDeletion(otherId, isContradiction ? 'superseded by contradiction' : 'superseded by a more specific restatement', now);
       this.order = this.order.filter((x) => x !== otherId);
+      delete this.index.tombstones[winnerId];
       this.index.facts[winnerId] = {
         text: winner,
         section: section || other.section,
@@ -263,6 +334,7 @@ export class Store {
     // them would make `wife why` claim a fact was confirmed repeatedly while
     // reporting that it was seen once.
     const sessions = [...new Set([...(seedSessions || []), ...(sessionId ? [sessionId] : [])])];
+    delete this.index.tombstones[id];
     this.index.facts[id] = {
       text: clean,
       section: section || this.configuredSections[0],
@@ -285,6 +357,7 @@ export class Store {
   remove(id, reason = 'user requested') {
     const fact = this.index.facts[id];
     if (!fact) return false;
+    this.#rememberDeletion(id, reason);
     delete this.index.facts[id];
     this.order = this.order.filter((x) => x !== id);
     this.dirty = true;
@@ -307,7 +380,11 @@ export class Store {
    * from filling with things you mentioned once and never meant.
    */
   stage({ text, section, kind, confidence, sessionId, evidence, threshold = 2 }) {
+    const secret = this.#containsSecret(text, section, evidence);
+    if (secret) return { action: 'unchanged', id: null, reason: `credential:${secret}` };
     const clean = tidy(text);
+    const normalizedSecret = detectSecret(clean, this.denyPatterns);
+    if (normalizedSecret) return { action: 'unchanged', id: null, reason: `credential:${normalizedSecret}` };
     if (!clean) return { action: 'unchanged' };
     const id = factId(clean);
     if (this.index.facts[id]) return this.upsert({ text: clean, section, kind, source: 'capture', confidence, sessionId, evidence });
@@ -397,8 +474,7 @@ export class Store {
   /** Evict the lowest-scoring facts until the store fits in `budget` tokens. */
   prune(budget) {
     const evicted = [];
-    let guard = 0;
-    while (this.tokens() > budget && guard++ < 500) {
+    while (this.tokens() > budget) {
       const candidates = this.activeFacts()
         .filter((f) => !f.pinned)
         .sort((a, b) => this.score(a) - this.score(b));

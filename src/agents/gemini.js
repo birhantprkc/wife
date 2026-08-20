@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { readText, writeAtomic, exists, ensureDir } from '../util/fsx.js';
+import { hasManagedBlock, removeManagedBlock, upsertManagedBlock } from '../util/managed.js';
 import { findProjectRoot } from '../util/paths.js';
 import { compileContext } from '../core/compile.js';
 
@@ -31,26 +32,21 @@ export function geminiPath({ project = false, cwd = process.cwd() } = {}) {
   return project ? path.join(findProjectRoot(cwd), 'GEMINI.md') : path.join(geminiHome(), 'GEMINI.md');
 }
 
-export function renderBlock({ cwd = process.cwd() } = {}) {
-  const { text, empty } = compileContext({ cwd });
+export function renderBlock({ cwd = process.cwd(), includeProject = true } = {}) {
+  const { text, empty } = compileContext({ cwd, includeProject });
   const body = empty ? '_No memory recorded yet._' : text.trim();
   return [BEGIN, '', body, '', `_Refresh with \`wife sync-gemini\`. Last updated ${new Date().toISOString().slice(0, 10)}._`, '', END].join('\n');
 }
 
 export function upsertBlock(existing, block) {
-  const current = existing || '';
-  const start = current.indexOf(BEGIN);
-  const end = current.indexOf(END);
-  if (start !== -1 && end !== -1 && end > start) return `${current.slice(0, start)}${block}${current.slice(end + END.length)}`;
-  const prefix = current.trim() ? `${current.trimEnd()}\n\n` : '';
-  return `${prefix}${block}\n`;
+  return upsertManagedBlock(existing, block);
 }
 
-export function attachGemini({ project = false, cwd = process.cwd() } = {}) {
+export function attachGemini({ project = false, cwd = process.cwd(), includeProject = project } = {}) {
   const file = geminiPath({ project, cwd });
   ensureDir(path.dirname(file));
   const existed = exists(file);
-  const next = upsertBlock(readText(file, ''), renderBlock({ cwd }));
+  const next = upsertBlock(readText(file, ''), renderBlock({ cwd, includeProject }));
   writeAtomic(file, next.endsWith('\n') ? next : `${next}\n`);
   return { file, existed, injectionOnly: true };
 }
@@ -59,16 +55,14 @@ export function detachGemini({ project = false, cwd = process.cwd() } = {}) {
   const file = geminiPath({ project, cwd });
   if (!exists(file)) return { file, removed: false, missing: true };
   const current = readText(file, '');
-  const start = current.indexOf(BEGIN);
-  const end = current.indexOf(END);
-  if (start === -1 || end === -1 || end < start) return { file, removed: false, missing: false };
-  const next = `${current.slice(0, start).trimEnd()}\n${current.slice(end + END.length).trimStart()}`;
-  writeAtomic(file, next.trim() ? next : '');
+  const result = removeManagedBlock(current);
+  if (!result.removed) return { file, removed: false, missing: false };
+  writeAtomic(file, result.text.trim() ? result.text : '');
   return { file, removed: true, missing: false };
 }
 
 export function geminiStatus({ project = false, cwd = process.cwd() } = {}) {
   const file = geminiPath({ project, cwd });
   const current = readText(file, null);
-  return { file, attached: Boolean(current && current.includes(BEGIN)), injectionOnly: true };
+  return { file, attached: Boolean(current && hasManagedBlock(current)), injectionOnly: true };
 }

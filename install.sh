@@ -11,8 +11,7 @@ red()   { printf '\033[31m%s\033[0m\n' "$1" >&2; }
 
 command -v node >/dev/null 2>&1 || { red "Node is required. Install Node 18.17 or newer, then run this again."; exit 1; }
 
-MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if [ "$MAJOR" -lt 18 ]; then
+if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 18 || (major === 18 && minor >= 17) ? 0 : 1)'; then
   red "Node $(node -v) is too old. wife needs 18.17 or newer."
   exit 1
 fi
@@ -22,16 +21,27 @@ if [ -f "$(dirname "$0")/package.json" ] && grep -q '"wife-memory"' "$(dirname "
   DIR="$(cd "$(dirname "$0")" && pwd)"
 else
   DIR="${WIFE_DIR:-$HOME/.local/share/wife}"
-  echo "Cloning into $DIR"
-  rm -rf "$DIR"
-  mkdir -p "$(dirname "$DIR")"
-  git clone --depth 1 "$REPO" "$DIR" >/dev/null
+  if [ -d "$DIR/.git" ] && [ -f "$DIR/package.json" ] && grep -q '"wife-memory"' "$DIR/package.json"; then
+    echo "Updating $DIR"
+    git -C "$DIR" pull --ff-only >/dev/null || {
+      red "Could not update the existing checkout at $DIR. Its files were left untouched."
+      exit 1
+    }
+  elif [ -e "$DIR" ]; then
+    red "$DIR already exists and is not a Wife git checkout. Move it aside and try again."
+    exit 1
+  else
+    echo "Cloning into $DIR"
+    mkdir -p "$(dirname "$DIR")"
+    git clone --depth 1 "$REPO" "$DIR" >/dev/null
+  fi
 fi
 
 cd "$DIR"
 echo "Linking the wife command"
-npm link >/dev/null 2>&1 || npm install -g . >/dev/null 2>&1 || {
-  red "Could not install globally. Try: sudo npm link   (or add npm's global bin to your PATH)"
+npm link >/dev/null || {
+  red "npm link failed. Check that npm's global prefix is writable and its bin directory is on PATH."
+  red "Wife did not use sudo and did not change any permissions."
   exit 1
 }
 

@@ -19,7 +19,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: unit tests
-        run: node --test test/*.test.js
-      - name: end-to-end
-        run: node test/e2e.mjs
+      - name: full check
+        run: npm run check

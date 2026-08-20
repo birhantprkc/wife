@@ -18,9 +18,32 @@ const SECRET_PATTERNS = [
   { id: 'jwt', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/ },
   { id: 'private-key-block', re: /-----BEGIN[A-Z ]*PRIVATE KEY-----/ },
   { id: 'bearer', re: /\bbearer\s+[A-Za-z0-9._-]{20,}/i },
+  { id: 'basic-auth', re: /\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/]{8,}={0,2}(?![A-Za-z0-9+/=])/i },
   { id: 'basic-auth-url', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:[^\s/@]+@/i },
-  { id: 'assigned-secret', re: /\b(?:pass(?:word|wd)?|secret|token|api[_-]?key|apikey|credential|priv(?:ate)?[_-]?key)\b\s*[:=]\s*\S{6,}/i },
-  { id: 'high-entropy-blob', re: /\b(?=[A-Za-z0-9+/=_-]{40,})(?=[^\s]*[A-Z])(?=[^\s]*[a-z])(?=[^\s]*\d)[A-Za-z0-9+/=_-]{40,}\b/ },
+  {
+    id: 'assigned-secret',
+    // Match both prose ("password is …", "contraseña: …") and the
+    // compound identifiers used in env files (CLIENT_SECRET, DB_PASSWORD).
+    // Human-readable labels often contain spaces ("API key", "private key"),
+    // while env-style labels use underscores or dashes, so both shapes matter.
+    // Requiring an assignment word or separator avoids treating phrases such
+    // as "token budget" and "secret rotation policy" as credentials.
+    re: /(?:\b(?:(?:[a-z0-9]+[_-])*(?:pass(?:word|wd)?|secret|token|api[_-]?key|apikey|access[_-]?key|credential|priv(?:ate)?[_-]?key)|(?:api|access|private)\s+key|secret\s+access\s+key|contrase(?:ñ|n)a)\b\s*(?::|=|\bis\b|\bes\b)|\bclave\b\s*[:=])\s*["'`]?\S{6,}/i,
+  },
+  {
+    id: 'assigned-secret-es',
+    // "La clave es mantener las pruebas rápidas" is ordinary prose. Treat
+    // "clave es <value>" as a credential only when the first value-shaped
+    // token contains both a letter and a digit/symbol, as real keys commonly do.
+    re: /\bclave\b\s+es\s+["'`]?(?=[^\s"'`]{6,})(?=[^\s"'`]*[A-Za-z])(?=[^\s"'`]*(?:\d|[_.\/+\-=:]))[^\s"'`]{6,}/i,
+  },
+  {
+    id: 'high-entropy-blob',
+    // A word boundary does not exist after base64 padding (`=`), nor between
+    // an underscore-prefixed label and its value. Delimit by the alphabet
+    // itself so padded session tokens are screened too.
+    re: /(?:^|[^A-Za-z0-9+/=_-])(?=[A-Za-z0-9+/=_-]{40,}(?:$|[^A-Za-z0-9+/=_-]))(?=[A-Za-z0-9+/=_-]*[A-Z])(?=[A-Za-z0-9+/=_-]*[a-z])(?=[A-Za-z0-9+/=_-]*\d)[A-Za-z0-9+/=_-]{40,}/,
+  },
   { id: 'long-hex', re: /\b[a-f0-9]{40,}\b/i },
   { id: 'connection-string', re: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/\S+/i },
 ];

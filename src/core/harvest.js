@@ -3,8 +3,8 @@ import { loadConfig } from './config.js';
 import { openIdentity, openProject } from './memory.js';
 import { readSession, dropSession, listSessions } from './session.js';
 import { record } from './journal.js';
-import { sep } from 'node:path';
-import { sight, spread, promote } from './crossproject.js';
+import { sight, spread, promote, markPromoted } from './crossproject.js';
+import { findProjectRoot, projectKey } from '../util/paths.js';
 
 /**
  * The curator. Everything upstream of here is plumbing; this is where the
@@ -39,13 +39,14 @@ export function harvestSession(sessionId, { config = loadConfig(), identity = nu
   const projectCache = new Map();
   const touched = new Set([id]);
 
-  // `startsWith` alone would treat /work/api-old as living inside /work/api.
-  const under = (cwd, root) => cwd === root || cwd.startsWith(root.endsWith(sep) ? root : root + sep);
   const projectFor = (cwd) => {
-    const opened = [...projectCache.values()].find((p) => cwd && under(cwd, p.root));
-    if (opened) return opened;
-    const p = openProject(cwd || process.cwd(), config);
-    if (projectCache.has(p.key)) return projectCache.get(p.key);
+    // Resolve the actual root before consulting the cache. Reusing the first
+    // cached ancestor incorrectly attributed a nested Git repository to its
+    // parent, and made the result depend on prompt order.
+    const root = findProjectRoot(cwd || process.cwd());
+    const key = projectKey(root);
+    if (projectCache.has(key)) return projectCache.get(key);
+    const p = openProject(root, config);
     projectCache.set(p.key, p);
     touched.add(p.store);
     return p;
@@ -77,6 +78,11 @@ export function harvestSession(sessionId, { config = loadConfig(), identity = nu
         const p = projectFor(entry.cwd);
         if (sight({ text: c.text, projectKey: p.key, threshold: config.crossProjectThreshold })) {
           const up = promote(id, spread(config.crossProjectThreshold).find((e) => e.text === c.text) || { text: c.text, projects: [] });
+          // Persist identity before telling the ledger promotion is complete.
+          // If save fails or the process dies, the unmarked ledger retries on
+          // the next sighting instead of losing the promotion forever.
+          id.save();
+          markPromoted(c.text);
           if (up.action !== 'unchanged') report.promoted.push({ text: c.text });
         }
       }

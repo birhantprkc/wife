@@ -4,6 +4,7 @@ import { appendPrompt, listSessions } from '../core/session.js';
 import { loadConfig } from '../core/config.js';
 import { readStdin, say, ok, info, c, bullet, heading } from '../util/out.js';
 import { safeId } from '../util/paths.js';
+import { withStateLock } from '../util/lock.js';
 
 /**
  * Everything in this file runs inside an agent hook. Two rules follow from that:
@@ -54,7 +55,9 @@ export async function cmdInject(args) {
 
   if (config.capture !== false) {
     try {
-      harvestPending({ config, exclude: current });
+      // If another process is mutating memory, leave the orphaned buffer in
+      // place. The next session start will retry it; injection must never wait.
+      await withStateLock(() => harvestPending({ config, exclude: current }));
     } catch {
       /* a harvest failure must never block a session from starting */
     }
@@ -96,6 +99,7 @@ export async function cmdCapture(args) {
       prompt,
       cwd: input.cwd || process.cwd(),
       agent: args.agent || input.hook_event_name || 'unknown',
+      denyPatterns: config.denyPatterns,
     });
   } catch {
     /* buffering is best effort */
@@ -119,9 +123,18 @@ export async function cmdHarvest(args) {
     if (input.cwd) cwd = input.cwd;
   }
 
-  const reports = sessionId
-    ? [harvestSession(sessionId, { config })]
-    : listSessions().map((id) => harvestSession(id, { config }));
+  const locked = await withStateLock(() => (
+    sessionId
+      ? [harvestSession(sessionId, { config })]
+      : listSessions().map((id) => harvestSession(id, { config }))
+  ));
+  if (!locked.acquired) {
+    // Hooks stay silent and succeed; an interactive invocation gets one useful
+    // hint. Crucially, the unharvested session file remains for a later retry.
+    if (!args.quiet && !args.stdin) info('Memory is busy; buffered sessions were left for the next harvest.');
+    return 0;
+  }
+  const reports = locked.value;
 
   // Cursor has no session-start hook that can inject context, so its rules file
   // is rewritten here instead, at the end of the session that changed memory.

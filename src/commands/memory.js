@@ -2,6 +2,7 @@ import { loadConfig } from '../core/config.js';
 import { openIdentity, openProject } from '../core/memory.js';
 import { findEntries } from '../core/journal.js';
 import { judge } from '../core/extract.js';
+import { detectSecret } from '../core/redact.js';
 import { ok, fail, warn, say, info, c, bullet, heading, plural } from '../util/out.js';
 
 function pickStore(args, config = loadConfig()) {
@@ -27,12 +28,25 @@ export function cmdRemember(args) {
     return 1;
   }
 
+  const requestedScope = args.project ? 'project' : args.user ? 'user' : args.scope || 'user';
+  const section = args.section || (requestedScope === 'user' ? 'Who' : 'Decisions');
+  if (detectSecret(section, config.denyPatterns)) {
+    // Section names are rendered into markdown too. Do not repeat the rejected
+    // value in the error, because command output can be captured in transcripts.
+    fail('That section name looks like a credential. wife will not store it.');
+    return 1;
+  }
+
   const { store, label, scope } = pickStore(args, config);
-  const section = args.section || (scope === 'user' ? 'Who' : 'Decisions');
   const result = store.upsert({
     text, section, kind: 'manual', source: 'manual', confidence: 1,
     evidence: 'stated directly with `wife remember`',
   });
+
+  if (result.action === 'unchanged' && /credential/i.test(result.reason || '')) {
+    fail('That looks like a credential. wife will not store it.');
+    return 1;
+  }
 
   const budget = scope === 'user' ? config.budget.identity : config.budget.project;
   const pruned = store.prune(budget);

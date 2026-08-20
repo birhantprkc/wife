@@ -39,9 +39,20 @@ export function sight({ text, projectKey, threshold = 3 }) {
   ledger.facts[key] = entry;
 
   const crosses = !entry.promoted && entry.projects.length >= threshold;
-  if (crosses) entry.promoted = true;
   writeJSON(ledgerPath(), ledger);
   return crosses;
+}
+
+/** Mark promotion only after the identity store has been saved successfully. */
+export function markPromoted(text) {
+  const ledger = load();
+  const key = normalize(text);
+  const entry = ledger.facts[key];
+  if (!entry) return false;
+  entry.promoted = true;
+  entry.promotedAt = new Date().toISOString();
+  writeJSON(ledgerPath(), ledger);
+  return true;
 }
 
 /** Facts that have appeared in more than one repo, most widespread first. */

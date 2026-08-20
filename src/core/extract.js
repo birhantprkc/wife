@@ -22,10 +22,11 @@ const TASK_VERBS = [
   'haz', 'hazme', 'dame', 'crea', 'créame', 'creame', 'arregla', 'corrige', 'implementa', 'escribe',
   'agrega', 'añade', 'anade', 'borra', 'elimina', 'refactoriza', 'revisa', 'explica', 'muestra',
   'busca', 'genera', 'instala', 'ejecuta', 'analiza', 'traduce', 'documenta', 'testea', 'prueba',
-  'necesito que', 'quiero que', 'puedes', 'podrias', 'podrías', 'ayudame', 'ayúdame', 'continua', 'continúa',
+  'necesito que', 'quiero que', 'por favor', 'puedes', 'podrias', 'podrías', 'ayudame', 'ayúdame', 'continua', 'continúa',
   'make', 'give', 'create', 'fix', 'implement', 'write', 'add', 'remove', 'delete', 'refactor',
   'review', 'explain', 'show', 'find', 'generate', 'install', 'run', 'analyze', 'translate',
-  'document', 'test', 'build', 'update', 'change', 'help', 'can you', 'could you', 'please',
+  'document', 'test', 'build', 'update', 'change', 'help', 'can you', 'could you', 'would you', 'please',
+  'i want you to', 'i need you to',
 ];
 
 const SELF_WORDS = new Set([
@@ -51,6 +52,11 @@ const PROJECT_WORDS = new Set([
   'api', 'schema', 'esquema', 'servidor', 'cliente', 'stack', 'aqui', 'este',
   'project', 'codebase', 'module', 'package', 'folder', 'file', 'database', 'server', 'client',
   'here', 'this', 'repository', 'service', 'lint', 'ci',
+  // Collective phrasing describes the codebase/team convention. Without these
+  // cues, an explicit "remember that we use pnpm" directive followed the user
+  // to every unrelated repository.
+  'we', 'our', 'ours', 'team', 'equipo', 'nosotros', 'nosotras', 'usamos', 'utilizamos',
+  'nuestro', 'nuestra', 'nuestros', 'nuestras',
   // version control and delivery vocabulary: "never commit directly to main" is
   // about the repo, not about you.
   'commit', 'commits', 'merge', 'push', 'pull', 'rebase', 'main', 'master', 'dev', 'staging',
@@ -72,7 +78,7 @@ const PROJECT_WORDS = new Set([
  */
 const LABEL = {
   es: { prefers: 'Prefiere', dislikes: 'No le gusta', avoid: 'Evitar:', uses: 'Usa', name: 'Se llama', livesIn: 'Vive en', worksAt: 'Trabaja en', worksAs: 'Trabaja como', is: 'Es' },
-  en: { prefers: 'Prefers', dislikes: 'Dislikes', avoid: 'Avoid:', uses: 'Uses', name: 'Name:', livesIn: 'Based in', worksAt: 'Works at', worksAs: 'Works as', is: 'Is' },
+  en: { prefers: 'Prefers', dislikes: 'Dislikes', avoid: 'Avoid:', uses: 'Uses', name: 'Name:', livesIn: 'Based in', worksAt: 'Works at', worksIn: 'Works in', worksAs: 'Works as', is: 'Is' },
 };
 
 const RULES = [
@@ -151,14 +157,13 @@ const RULES = [
     lang: 'es',
     kind: 'identity',
     confidence: 0.85,
-    pattern: /\b(?:me\s+llamo|mi\s+nombre\s+es|soy|trabajo\s+en|trabajo\s+como|vivo\s+en|estoy\s+basado\s+en)\s+(.{3,120}?)(?=[.;\n]|$)/giu,
-    render: (m, sentence) => {
-      const lead = /me\s+llamo|mi\s+nombre\s+es/i.test(sentence) ? LABEL.es.name
-        : /vivo\s+en|basado\s+en/i.test(sentence) ? LABEL.es.livesIn
-          : /trabajo\s+en/i.test(sentence) ? LABEL.es.worksAt
-            : /trabajo\s+como/i.test(sentence) ? LABEL.es.worksAs
-              : LABEL.es.is;
-      return `${lead} ${m[1]}`;
+    pattern: /\b(?:me\s+llamo|mi\s+nombre\s+es)\s+(.{2,80}?)(?=\s+y\s+(?:soy|trabajo|vivo|estoy)|[.;\n]|$)|\bsoy\s+(?:un\s+|una\s+)?(.{3,120}?)(?=\s+y\s+(?:trabajo|vivo|estoy|me\s+llamo)|[.;\n]|$)|\btrabajo\s+en\s+(.{2,80}?)(?=\s+y\s+(?:soy|vivo|estoy|me\s+llamo)|[.;\n]|$)|\btrabajo\s+como\s+(.{2,80}?)(?=\s+y\s+(?:soy|vivo|estoy|me\s+llamo)|[.;\n]|$)|\b(?:vivo\s+en|estoy\s+basado\s+en)\s+(.{2,80}?)(?=\s+y\s+(?:soy|trabajo|me\s+llamo)|[.;\n]|$)/giu,
+    render: (m) => {
+      if (m[1]) return `${LABEL.es.name} ${m[1]}`;
+      if (m[2]) return `${LABEL.es.is} ${m[2]}`;
+      if (m[3]) return `${LABEL.es.worksAt} ${m[3]}`;
+      if (m[4]) return `${LABEL.es.worksAs} ${m[4]}`;
+      return `${LABEL.es.livesIn} ${m[5]}`;
     },
   },
   {
@@ -166,10 +171,11 @@ const RULES = [
     lang: 'en',
     kind: 'identity',
     confidence: 0.85,
-    pattern: /\bi(?:'m|\s+am)\s+(?:a\s+|an\s+)?(.{3,120}?)(?=[.;\n]|$)|\bmy\s+name\s+is\s+(.{2,80}?)(?=[.;\n]|$)|\bi\s+(?:live|work)\s+(?:in|at)\s+(.{2,80}?)(?=[.;\n]|$)/giu,
+    pattern: /\bi(?:'m|\s+am)\s+(?:a\s+|an\s+)?(.{3,120}?)(?=\s+and\s+(?:i\b|my\s+name)|[.;\n]|$)|\bmy\s+name\s+is\s+(.{2,80}?)(?=\s+and\s+i\b|[.;\n]|$)|\bi\s+live\s+(?:in|at)\s+(.{2,80}?)(?=\s+and\s+i\b|[.;\n]|$)|\bi\s+work\s+(at|in)\s+(.{2,80}?)(?=\s+and\s+i\b|[.;\n]|$)/giu,
     render: (m) => {
       if (m[2]) return `${LABEL.en.name} ${m[2]}`;
       if (m[3]) return `${LABEL.en.livesIn} ${m[3]}`;
+      if (m[5]) return `${m[4].toLowerCase() === 'at' ? LABEL.en.worksAt : LABEL.en.worksIn} ${m[5]}`;
       return `${LABEL.en.is} ${m[1]}`;
     },
   },
@@ -246,12 +252,18 @@ export function judge(text, denyPatterns = [], options = {}) {
 
 /** user-scope facts are about the person; project-scope facts are about this codebase. */
 export function classifyScope(text, kind) {
-  const words = new Set(normalize(text).split(' '));
+  const normalized = normalize(text);
+  const words = new Set(normalized.split(' '));
   const hits = (set) => [...words].filter((w) => set.has(w)).length;
-  if (kind === 'identity' || kind === 'preference') return 'user';
+  if (kind === 'identity') return 'user';
   const style = hits(STYLE_WORDS);
   const self = hits(SELF_WORDS);
   const project = hits(PROJECT_WORDS);
+  // An explicit repository qualifier beats a personal-sounding verb such as
+  // "prefer". Otherwise "I prefer Vitest in this project" escaped into the
+  // global identity store.
+  if (/\b(?:this|este|esta)\s+(?:project|repository|repo|proyecto|repositorio)\b/.test(normalized)) return 'project';
+  if (kind === 'preference' && project === 0) return 'user';
   // Compare, do not short-circuit. An absolute "any style word wins" rule sent
   // "nunca hagas commit directo a main" to identity, because "directo" also
   // appears in "respuestas directas". Weighing the vocabularies against each
@@ -302,6 +314,21 @@ export function extract(prompt, { denyPatterns = [], maxChars = 4000 } = {}) {
 
   const seen = new Set();
   for (const sentence of sentences(raw)) {
+    // Screen the complete source sentence before rendering or truncating it.
+    // A credential can sit before the matched phrase, or beyond tidy()'s
+    // 180-character cap, while the rendered fact itself looks harmless. The
+    // sentence is also stored as evidence, so it must pass the same gate.
+    const sentenceSecret = detectSecret(sentence, denyPatterns);
+    if (sentenceSecret) {
+      rejected.push({
+        text: '<sentence containing a credential>',
+        reason: REJECTIONS.SECRET,
+        detail: sentenceSecret,
+      });
+      continue;
+    }
+    const taskLead = startsWithTaskVerb(sentence);
+
     for (const rule of RULES) {
       rule.pattern.lastIndex = 0;
       let match;
@@ -309,16 +336,33 @@ export function extract(prompt, { denyPatterns = [], maxChars = 4000 } = {}) {
       while ((match = rule.pattern.exec(sentence)) !== null) {
         if (match[0].length === 0) { rule.pattern.lastIndex++; continue; }
         const rendered = titleCase(tidy(rule.render(match, sentence)));
+        // The durable-looking phrase may be nested inside a one-off task:
+        // "write a component that always uses memoization". Judge the lead of
+        // the original sentence, while still allowing an intentional
+        // "please remember that ..." directive.
+        if (taskLead && rule.kind !== 'directive') {
+          rejected.push({ text: tidy(sentence, 200), reason: REJECTIONS.TASK, rule: rule.id });
+          matchedThisRule = true;
+          break;
+        }
         const verdict = judge(rendered, denyPatterns);
         if (!verdict.ok) {
-          rejected.push({ text: rendered, reason: verdict.reason, detail: verdict.detail, rule: rule.id });
+          rejected.push({
+            text: verdict.reason === REJECTIONS.SECRET ? '<candidate containing a credential>' : rendered,
+            reason: verdict.reason,
+            detail: verdict.detail,
+            rule: rule.id,
+          });
           matchedThisRule = true;
           continue;
         }
         const key = normalize(verdict.text);
         if (seen.has(key)) { matchedThisRule = true; continue; }
         seen.add(key);
-        const scope = classifyScope(verdict.text, rule.kind);
+        // Scope needs first-person and repository cues that rendering may have
+        // removed ("I always deploy" becomes "Always deploy"). `sentence` is
+        // safe here because it passed the credential gate above.
+        const scope = classifyScope(sentence, rule.kind);
         candidates.push({
           text: verdict.text,
           kind: rule.kind,
