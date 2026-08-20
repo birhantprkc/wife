@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { paths, homeRelative } from '../util/paths.js';
@@ -19,13 +20,29 @@ function git(args, { cwd = paths.home(), quiet = true } = {}) {
   return { code: res.status, out: (res.stdout || '').trim(), err: (res.stderr || '').trim() };
 }
 
+function canonicalPath(value) {
+  const resolved = path.resolve(value);
+  try {
+    // Git reports the physical work-tree path. WIFE_HOME may use an OS alias
+    // for that same directory (/var -> /private/var on macOS, or an 8.3 path
+    // on Windows), so compare physical paths rather than their spellings.
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function isRepo() {
   const top = git(['rev-parse', '--show-toplevel']);
   if (top.code !== 0 || !top.out) return false;
   // WIFE_HOME can live below an unrelated repository (a common setup when a
   // user's home directory itself is versioned). Never let Git walk upward and
   // mistake that ancestor for Wife's private sync repository.
-  return path.resolve(top.out).toLowerCase() === path.resolve(paths.home()).toLowerCase();
+  const repo = canonicalPath(top.out);
+  const home = canonicalPath(paths.home());
+  return process.platform === 'win32'
+    ? repo.toLowerCase() === home.toLowerCase()
+    : repo === home;
 }
 
 const RULES_BEGIN = '# wife:sync-rules:begin';

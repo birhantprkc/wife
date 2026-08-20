@@ -112,7 +112,10 @@ fs.writeFileSync(stagedSession, '{"prompt":"password = must-stay-local"}\n');
 gitAt(laptop.home, ['add', '-f', 'sessions/staged-private.jsonl']);
 
 r = laptop.run(['sync']);
-check('first sync pushes', r.status === 0, (r.stderr || r.stdout).trim());
+const remoteIdentity = gitAt(bare, ['show', 'main:identity.index.json']);
+check('first sync pushes real memory, not a successful no-op',
+  r.status === 0 && remoteIdentity.status === 0 && /español|cortas/i.test(remoteIdentity.stdout),
+  (r.stderr || r.stdout || remoteIdentity.stderr).trim());
 check('a newly staged private session is removed from Git without deleting it locally',
   fs.existsSync(stagedSession) && !gitAt(laptop.home, ['ls-files', '--', 'sessions']).stdout.trim());
 check('neither sessions nor the live state lock reached the remote tip',
