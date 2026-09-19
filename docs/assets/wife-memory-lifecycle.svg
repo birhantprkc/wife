@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Ciclo de memoria de Wife</title>
+  <desc id="desc">Wife filtra secretos, deja los hechos como candidatos, los promueve tras una segunda sesión o un recuerdo explícito, mantiene límites de tokens y prepara contexto de proyecto.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#26131e"/>
+      <stop offset="1" stop-color="#4a2133"/>
+    </linearGradient>
+    <linearGradient id="memory" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#aa4e69"/>
+      <stop offset="1" stop-color="#7d3456"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity=".36"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#f8b4c8"/>
+    </marker>
+    <marker id="arrowMint" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#9ee8c5"/>
+    </marker>
+    <style>
+      .ui { font-family: Inter, Segoe UI, Arial, sans-serif; }
+      .title { font-size: 42px; font-weight: 750; fill: #fff9fb; }
+      .subtitle { font-size: 20px; fill: #e8bdcb; }
+      .label { font-size: 21px; font-weight: 700; fill: #fff9fb; }
+      .body { font-size: 16px; fill: #e8cbd5; }
+      .small { font-size: 15px; fill: #d6afbd; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 16px; fill: #ffd2df; }
+    </style>
+  </defs>
+  <rect width="1600" height="900" rx="36" fill="url(#bg)"/>
+  <circle cx="1450" cy="110" r="240" fill="#db6d91" opacity=".13"/>
+  <circle cx="120" cy="820" r="260" fill="#9b537f" opacity=".12"/>
+
+  <g class="ui">
+    <text x="86" y="92" class="title">Wife · memoria local + continuidad de proyecto</text>
+    <text x="86" y="130" class="subtitle">No acumula texto sin límite: filtra, cura, reconcilia y entrega contexto acotado</text>
+
+    <g filter="url(#shadow)">
+      <rect x="86" y="210" width="250" height="124" rx="22" fill="#49243b" stroke="#d47a9d" stroke-width="2"/>
+      <rect x="380" y="210" width="250" height="124" rx="22" fill="#49243b" stroke="#d47a9d" stroke-width="2"/>
+      <rect x="674" y="210" width="270" height="124" rx="22" fill="#593048" stroke="#f1a6bd" stroke-width="2"/>
+      <rect x="988" y="174" width="440" height="196" rx="26" fill="url(#memory)" stroke="#ffd0dd" stroke-width="2"/>
+    </g>
+    <text x="211" y="258" class="label" text-anchor="middle">Sesión / reglas</text>
+    <text x="211" y="290" class="body" text-anchor="middle">hechos, preferencias</text>
+    <text x="211" y="315" class="body" text-anchor="middle">y decisiones de proyecto</text>
+    <path d="M336 272 H380" fill="none" stroke="#f8b4c8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="505" y="258" class="label" text-anchor="middle">Screening</text>
+    <text x="505" y="290" class="body" text-anchor="middle">credenciales fuera</text>
+    <text x="505" y="315" class="body" text-anchor="middle">antes de escribir</text>
+    <path d="M630 272 H674" fill="none" stroke="#f8b4c8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="809" y="258" class="label" text-anchor="middle">Candidato</text>
+    <text x="809" y="290" class="body" text-anchor="middle">una mención ≠ memoria</text>
+    <text x="809" y="315" class="mono" text-anchor="middle">staged</text>
+    <path d="M944 272 H988" fill="none" stroke="#f8b4c8" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="1208" y="225" class="label" text-anchor="middle">Curación semántica</text>
+    <text x="1208" y="260" class="body" text-anchor="middle">segunda sesión o `remember` explícito</text>
+    <text x="1208" y="294" class="body" text-anchor="middle">contradicción → reemplazo · especificidad → merge</text>
+    <text x="1208" y="331" class="mono" text-anchor="middle">score = confianza × recencia × repetición × intención</text>
+
+    <path d="M1208 370 V430" fill="none" stroke="#9ee8c5" stroke-width="5" marker-end="url(#arrowMint)"/>
+    <g filter="url(#shadow)">
+      <rect x="590" y="430" width="680" height="146" rx="26" fill="#6b324f" stroke="#ffd0dd" stroke-width="2"/>
+    </g>
+    <text x="930" y="476" class="label" text-anchor="middle">Memoria acotada e inyectable</text>
+    <text x="930" y="510" class="body" text-anchor="middle">Identity ≤ 1200 tokens · Project ≤ 800 tokens</text>
+    <text x="930" y="544" class="body" text-anchor="middle">pinned no decae · lo menos relevante se evicta</text>
+
+    <path d="M590 503 H405 V640" fill="none" stroke="#f8b4c8" stroke-width="4" marker-end="url(#arrow)"/>
+    <path d="M1270 503 H1450 V640" fill="none" stroke="#f8b4c8" stroke-width="4" marker-end="url(#arrow)"/>
+    <g filter="url(#shadow)">
+      <rect x="86" y="640" width="640" height="114" rx="22" fill="#49243b" stroke="#d47a9d" stroke-width="2"/>
+      <rect x="874" y="640" width="640" height="114" rx="22" fill="#49243b" stroke="#d47a9d" stroke-width="2"/>
+    </g>
+    <text x="406" y="684" class="label" text-anchor="middle">Contexto de sesión</text>
+    <text x="406" y="718" class="body" text-anchor="middle">se inyecta sólo memoria despierta y relevante</text>
+    <text x="1194" y="684" class="label" text-anchor="middle">Dormant / olvidado</text>
+    <text x="1194" y="718" class="body" text-anchor="middle">fuera del contexto hasta revivir o borrar</text>
+
+    <path d="M406 754 V812 H800" fill="none" stroke="#9ee8c5" stroke-width="3" stroke-dasharray="10 10" marker-end="url(#arrowMint)"/>
+    <path d="M1194 754 V812 H800" fill="none" stroke="#9ee8c5" stroke-width="3" stroke-dasharray="10 10" marker-end="url(#arrowMint)"/>
+    <text x="800" y="846" class="small" text-anchor="middle">Continuidad: checkpoint + evidencia/receipts → el siguiente agente retoma el proyecto sin leer sesiones crudas.</text>
+  </g>
+</svg>

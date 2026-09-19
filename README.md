@@ -70,6 +70,10 @@ Injected at session start
 
 That block is handed to Claude Code and Codex at the start of **every** session. You never typed it. Wife learned it from things you already said, and it forgets anything you delete.
 
+<p align="center">
+  <img src="docs/assets/wife-memory-lifecycle.svg" alt="Diagrama del ciclo de Wife: screening de secretos, candidatos, curación con compuerta de segunda sesión, memoria acotada e inyección de contexto" width="100%" />
+</p>
+
 ---
 
 ## Why
