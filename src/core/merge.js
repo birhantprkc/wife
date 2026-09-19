@@ -293,4 +293,68 @@ export function mergeJournal(ourLines, theirLines) {
   });
 }
 
+/**
+ * Evidence is an append-only receipt stream. Unlike the audit journal, each
+ * receipt has a stable id, so two copies of the same receipt with different
+ * JSON field order still collapse to one entry. A later edit wins for a
+ * duplicate id, and the resulting stream is deterministic for Git.
+ */
+export function mergeEvidence(ourLines = [], theirLines = []) {
+  const byId = new Map();
+  for (const entry of [...ourLines, ...theirLines]) {
+    const current = byId.get(entry.id);
+    const entryAt = timestamp(entry.at, Number.NEGATIVE_INFINITY);
+    const currentAt = timestamp(current?.at, Number.NEGATIVE_INFINITY);
+    if (!current || entryAt > currentAt ||
+        (entryAt === currentAt && JSON.stringify(entry).localeCompare(JSON.stringify(current)) >= 0)) {
+      byId.set(entry.id, entry);
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    const byDate = String(a.at || '').localeCompare(String(b.at || ''));
+    return byDate || String(a.id).localeCompare(String(b.id));
+  });
+}
+
+/**
+ * Merge a project handoff. Scalar snapshot fields follow the newer checkpoint;
+ * list fields union concurrent additions so two machines do not silently lose
+ * a next step or a completed item. When a side is the only one changed from
+ * the common ancestor, its intentional replacement still wins.
+ */
+export function mergeCheckpoint(base, ours, theirs) {
+  const B = base || {};
+  const O = ours || {};
+  const T = theirs || {};
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const oursAt = timestamp(O.updatedAt, Number.NEGATIVE_INFINITY);
+  const theirsAt = timestamp(T.updatedAt, Number.NEGATIVE_INFINITY);
+  const latest = oursAt > theirsAt ||
+    (oursAt === theirsAt && JSON.stringify(O).localeCompare(JSON.stringify(T)) >= 0) ? O : T;
+  const changedOurs = (key) => !same(O[key], B[key]);
+  const changedTheirs = (key) => !same(T[key], B[key]);
+  const choose = (key) => {
+    if (changedOurs(key) && !changedTheirs(key)) return O[key];
+    if (changedTheirs(key) && !changedOurs(key)) return T[key];
+    return latest[key] ?? O[key] ?? T[key] ?? B[key];
+  };
+  const union = (key) => {
+    if (changedOurs(key) && !changedTheirs(key)) return O[key] || [];
+    if (changedTheirs(key) && !changedOurs(key)) return T[key] || [];
+    return [...new Set([...(O[key] || []), ...(T[key] || [])])];
+  };
+  return {
+    version: 1,
+    project: latest.project || O.project || T.project || B.project || {},
+    goal: choose('goal') || '',
+    done: union('done').slice(0, 50),
+    next: union('next').slice(0, 50),
+    blocked: union('blocked').slice(0, 50),
+    branch: choose('branch') || '',
+    commit: choose('commit') || '',
+    dirtyFiles: union('dirtyFiles').slice(0, 80),
+    updatedAt: latest.updatedAt || O.updatedAt || T.updatedAt || B.updatedAt || null,
+  };
+}
+
 export const _internals = { mergeFact, mergePending, normalize };

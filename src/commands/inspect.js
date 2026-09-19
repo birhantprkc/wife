@@ -11,6 +11,7 @@ import { geminiStatus } from '../agents/gemini.js';
 import { paths, homeRelative } from '../util/paths.js';
 import { estimateTokens } from '../util/text.js';
 import { exists } from '../util/fsx.js';
+import { continuityStatus } from './continuity.js';
 import { say, c, heading, bullet, meter, info, warn, ok, plural } from '../util/out.js';
 
 /**
@@ -92,6 +93,21 @@ export function cmdStatus() {
   say(`  identity    ${plural(identity.activeFacts().length, 'fact')} · ${identity.tokens()}/${config.budget.identity} tokens`);
   say(`  project     ${project.name} · ${plural(project.store.activeFacts().length, 'fact')} · ${project.store.tokens()}/${config.budget.project} tokens`);
   say(`  root        ${homeRelative(project.root)}`);
+
+  const continuity = continuityStatus();
+  heading('Project continuity');
+  if (continuity.checkpoint) {
+    say(`  checkpoint  ${continuity.checkpoint.goal || 'in progress'} · updated ${continuity.checkpoint.updatedAt || 'unknown'}`);
+    if (continuity.checkpoint.next.length) say(c.gray(`  next        ${continuity.checkpoint.next.join(' · ')}`));
+  } else {
+    say(c.gray('  checkpoint  none — use `wife checkpoint set --goal "…"`'));
+  }
+  say(`  evidence    ${continuity.evidenceCount} recorded receipt(s)`);
+  if (continuity.snapshot.available) {
+    say(`  repository  ${continuity.snapshot.branch || '(detached)'} · ${continuity.snapshot.commit || 'no commit'} · ${continuity.snapshot.dirty ? `${continuity.snapshot.dirtyFiles.length} changed file(s)` : 'clean'}`);
+  } else {
+    say(c.gray('  repository  Git not detected'));
+  }
 
   heading('Agents');
   if (claude.invalid) warn(`Claude Code — invalid settings JSON at ${homeRelative(claude.file)}. Fix it before attach/detach.`);

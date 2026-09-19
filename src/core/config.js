@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG = {
   budget: {
     identity: 1200,
     project: 800,
+    context: 1200,
     session: 400,
   },
 

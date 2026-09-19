@@ -5,10 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { paths, homeRelative } from '../util/paths.js';
 import { writeJSON, readText, writeAtomic, exists, removeFile } from '../util/fsx.js';
 import { contradicts, factId, refines } from '../util/text.js';
-import { mergeIndex, mergeLedger, mergeJournal } from '../core/merge.js';
+import { mergeIndex, mergeLedger, mergeJournal, mergeEvidence, mergeCheckpoint } from '../core/merge.js';
 import { loadConfig } from '../core/config.js';
 import { openIdentity, listProjects } from '../core/memory.js';
 import { Store } from '../core/store.js';
+import { detectSecret } from '../core/redact.js';
 import { say, ok, warn, fail, info, c, heading, blank, plural } from '../util/out.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -113,12 +114,20 @@ function installDriver() {
   git(['config', 'merge.wife-md.name', 'Keep local markdown; it is regenerated after the merge']);
   git(['config', 'merge.wife-md.driver', 'true']);
 
+  git(['config', 'merge.wife-evidence.name', 'Union project evidence receipts']);
+  git(['config', 'merge.wife-evidence.driver', `"${process.execPath}" "${BIN}" merge-driver %O %A %B %P`]);
+
+  git(['config', 'merge.wife-checkpoint.name', 'Merge project checkpoints by recency and intent']);
+  git(['config', 'merge.wife-checkpoint.driver', `"${process.execPath}" "${BIN}" merge-driver %O %A %B %P`]);
+
   const attrs = path.join(home, '.gitattributes');
   ensureTrailingRules(attrs, [
     '# Memory is merged by meaning, not by line. See `wife merge-driver`.',
     '*.index.json    merge=wife',
     'cross-project.json merge=wife',
     'journal.jsonl   merge=wife',
+    'evidence.jsonl  merge=wife-evidence',
+    'checkpoint.json merge=wife-checkpoint',
     '# Markdown is regenerated from the merged index, so either side will do.',
     '*.md            merge=wife-md',
   ]);
@@ -375,6 +384,41 @@ function validateLedger(ledger, label, allowNull = false) {
   }
 }
 
+const EVIDENCE_ID = /^[a-f0-9]{12}$/;
+
+function validateEvidenceEntry(entry, label) {
+  if (!isRecord(entry) || !EVIDENCE_ID.test(entry.id) || !validDate(entry.at) ||
+      !validText(entry.kind) || !validText(entry.text) || !validText(entry.source) ||
+      !validText(entry.status) || !Array.isArray(entry.files) || !validStringList(entry.files) ||
+      (entry.commit !== undefined && typeof entry.commit !== 'string')) {
+    throw new Error(`${label} contains an invalid evidence receipt`);
+  }
+  if (detectSecret(JSON.stringify(entry))) {
+    throw new Error(`${label} contains a credential-shaped value; merge stopped`);
+  }
+}
+
+function validateEvidence(entries, label) {
+  if (!Array.isArray(entries)) throw new Error(`${label} is not a JSONL list`);
+  entries.forEach((entry) => validateEvidenceEntry(entry, label));
+}
+
+function validateCheckpoint(checkpoint, label, allowNull = false) {
+  if (checkpoint === null && allowNull) return;
+  if (!isRecord(checkpoint) || checkpoint.version !== 1 || !isRecord(checkpoint.project) ||
+      !validText(checkpoint.project.key) || !validText(checkpoint.project.name) ||
+      typeof checkpoint.goal !== 'string' || !validStringList(checkpoint.done) ||
+      !validStringList(checkpoint.next) || !validStringList(checkpoint.blocked) ||
+      typeof checkpoint.branch !== 'string' || typeof checkpoint.commit !== 'string' ||
+      !validStringList(checkpoint.dirtyFiles) ||
+      (checkpoint.updatedAt !== null && !validDate(checkpoint.updatedAt))) {
+    throw new Error(`${label} is not a valid project checkpoint`);
+  }
+  if (detectSecret(JSON.stringify(checkpoint))) {
+    throw new Error(`${label} contains a credential-shaped value; merge stopped`);
+  }
+}
+
 /**
  * `wife merge-driver <base> <ours> <theirs> <logical-path>` — invoked by git.
  *
@@ -395,6 +439,25 @@ export function cmdMergeDriver(args) {
     if (logical.endsWith('journal.jsonl')) {
       const merged = mergeJournal(readJSONLinesStrict(oursPath, 'current journal'), readJSONLinesStrict(theirsPath, 'incoming journal'));
       writeAtomic(oursPath, merged.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      return 0;
+    }
+    if (logical.endsWith('evidence.jsonl')) {
+      const ours = readJSONLinesStrict(oursPath, 'current evidence');
+      const theirs = readJSONLinesStrict(theirsPath, 'incoming evidence');
+      validateEvidence(ours, 'current evidence');
+      validateEvidence(theirs, 'incoming evidence');
+      const merged = mergeEvidence(ours, theirs);
+      writeAtomic(oursPath, merged.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      return 0;
+    }
+    if (logical.endsWith('checkpoint.json')) {
+      const base = readJSONStrict(basePath, 'base checkpoint', { allowEmpty: true });
+      const ours = readJSONStrict(oursPath, 'current checkpoint');
+      const theirs = readJSONStrict(theirsPath, 'incoming checkpoint');
+      validateCheckpoint(base, 'base checkpoint', true);
+      validateCheckpoint(ours, 'current checkpoint');
+      validateCheckpoint(theirs, 'incoming checkpoint');
+      writeJSON(oursPath, mergeCheckpoint(base, ours, theirs));
       return 0;
     }
     if (logical.endsWith('cross-project.json')) {

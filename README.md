@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <a href="https://arkeaia.com/">arkeaia.com</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/ma-nucho-pro/wife/actions/workflows/ci.yml"><img src="https://github.com/ma-nucho-pro/wife/actions/workflows/ci.yml/badge.svg" alt="tests" /></a>
   <img src="https://img.shields.io/badge/license-MIT-8fbf6a?style=for-the-badge" alt="license MIT" />
   <img src="https://img.shields.io/badge/dependencies-0-2ea043?style=for-the-badge" alt="zero dependencies" />
@@ -31,6 +35,7 @@
   <a href="#install">Install</a> •
   <a href="#how-it-works">How it works</a> •
   <a href="#commands">Commands</a> •
+  <a href="#project-continuity">Project continuity</a> •
   <a href="#security">Security</a> •
   <a href="#faq">FAQ</a>
 </p>
@@ -81,7 +86,7 @@ Wife closes that gap with the only thing that actually works: **a curator.**
 
 ## What it actually does
 
-Storing text is trivial. The hard part — the entire product — is deciding **what deserves to be remembered, what replaces what, and what has to go.**
+Storing text is trivial. The hard part — the entire product — is deciding **what deserves to be remembered, what replaces what, and what has to go.** Wife now also keeps a bounded, evidence-aware handoff for the project itself, so a new session can resume the work instead of reconstructing it from scratch.
 
 ### It waits before it believes you
 
@@ -161,6 +166,8 @@ Facts are content-addressed and carry their own provenance, so they merge by
 | Only on one, and it is new | kept |
 | Contradiction across machines | the newer statement wins, the old one is dropped |
 | Candidate waiting on both | sessions merge — **the two-session gate now spans machines** |
+| Project evidence on both | receipts merge by id and timestamp, without dropping either machine's new receipt |
+| Project checkpoint on both | the newer snapshot wins for scalars; concurrent lists are unioned |
 
 That last row is the quiet win: say something once on the laptop and once on the
 desktop, and it is finally enough to be remembered.
@@ -236,6 +243,70 @@ Facts about **you** follow you everywhere. Facts about **this codebase** stay in
 "I never deploy on Fridays"          →  identity      (your habit, not the repo's)
 "this project uses Fastify"          →  checkout-api
 ```
+
+## Project continuity
+
+Wife's memory is about more than durable facts about you. It can also keep a
+small, explicit handoff for the repository you are working in. This is the
+first layer of a local project brain: inspectable files, no daemon, no
+embeddings, no telemetry, and no automatic mining of model output.
+
+### Checkpoint the work, not the transcript
+
+At the end of a session, save the current goal and the next useful actions:
+
+```bash
+wife checkpoint set \
+  --goal "Ship the project context pack" \
+  --done "Added bounded context output; tests are green" \
+  --next "Document the handoff in the README" \
+  --blocked "Waiting for a reviewer"
+
+wife checkpoint show
+```
+
+The checkpoint is stored per project and records the current branch, commit,
+and a bounded list of changed paths. It is a handoff, not an instruction: it
+does not override the current prompt or turn repository text into commands.
+
+### Build a relevant context pack
+
+When a new session starts, ask for only the background relevant to the task:
+
+```bash
+wife context "project context and authentication" --budget 1200
+wife context "project context and authentication" --json
+```
+
+The pack combines matching identity and project memory with the checkpoint,
+explicit evidence, and a local Git snapshot. It ranks by simple lexical
+relevance and enforces a hard token ceiling, so it stays small and predictable.
+The `--json` form is convenient for an editor, wrapper, or future agent
+integration.
+
+### Keep auditable receipts
+
+Evidence is explicit and append-only. Record a test result, decision, or other
+receipt when you want the next session to be able to verify it:
+
+```bash
+wife evidence add --kind test \
+  --text "npm run check passed: 254 unit tests" \
+  --status verified
+
+wife evidence list
+```
+
+Each receipt carries its kind, status, source, timestamp, optional files, and
+the current commit. Credential-shaped values are rejected before they reach
+disk; unsafe entries are dropped rather than masked. `wife status` now shows
+the checkpoint, evidence count, and repository state alongside the existing
+memory and hook status.
+
+This continuity layer is intentionally conservative. Wife still learns only
+from user prompts, while project evidence is recorded deliberately with
+`wife evidence add`; it never captures an agent's own response or stores a
+raw transcript as project memory.
 
 ### Every single fact is traceable
 
@@ -443,6 +514,17 @@ The curator runs in four steps:
 | `wife why "<text>"` | where it came from and what it replaced |
 | `wife edit` | open the memory file in `$EDITOR` — `--project` |
 
+### Project continuity
+
+| Command | What it does |
+|---|---|
+| `wife context "<task>"` | build a bounded, relevant project context pack — `--budget N`, `--json` |
+| `wife checkpoint set` | save the current goal, completed work, next steps, and blockers |
+| `wife checkpoint show` | inspect the handoff for the current project — `--json` |
+| `wife checkpoint clear` | remove the current project handoff |
+| `wife evidence add` | record an explicit, redacted receipt linked to the current commit |
+| `wife evidence list` | review recent project evidence — `--json`, `--limit N` |
+
 ### Inspect
 
 | Command | What it does |
@@ -494,6 +576,11 @@ Add your own with `wife config denyPatterns '["client-name","internal-codename"]
 
 **Raw prompts are transient.** They live in a session buffer only until that session is curated, then the buffer is deleted.
 
+**Project receipts are screened too.** `wife evidence add` rejects a whole
+receipt when it contains a credential-shaped value. Context packs read only
+bounded Wife files and local Git metadata; they do not read raw session
+buffers or an agent's output.
+
 **Everything is reversible.** `wife forget` removes a fact completely. Deleting a line from `identity.md` does the same. The journal records that a removal happened and when, never resurrecting the content.
 
 **Pause it whenever you want:** `wife config capture false` stops learning while still injecting what it already knows.
@@ -511,6 +598,8 @@ Add your own with `wife config denyPatterns '["client-name","internal-codename"]
       project.md         this repo. same rules
       project.index.json
       meta.json
+      checkpoint.json    explicit goal / done / next / blocked handoff
+      evidence.jsonl     redacted project receipts
   sessions/              prompt buffers, deleted once curated
   cross-project.json     which facts have shown up in more than one repo
   journal.jsonl          append-only audit log
@@ -528,6 +617,7 @@ The `.md` files are what you read and edit. The `.json` sidecars hold metadata t
 ```bash
 wife config                              # show everything
 wife config budget.identity 2000         # more room for who you are
+wife config budget.context 1600          # more room for project handoffs
 wife config promotionThreshold 3         # be even more sceptical
 wife config halfLife.project 30          # project facts go stale faster
 wife config denyPatterns '["acme-corp"]' # never store anything matching this
@@ -579,6 +669,17 @@ Yes. Both read the same memory, so a fact learned in one shows up in the other.
 **Can I edit the memory by hand?**
 That is the intended way to use it. The markdown file is the source of truth and your edits always win.
 
+**How does it help a new session resume a project?**
+Use `wife checkpoint set` to leave a goal, completed work, next steps, and
+blockers. `wife context "<task>"` then combines the relevant memory, that
+checkpoint, explicit evidence, and the local Git state inside a hard token
+budget. It is a bounded handoff, not an automatic transcript index.
+
+**Does Wife automatically collect evidence from tests or agent output?**
+No. Evidence is deliberately recorded with `wife evidence add`, so every
+receipt has a clear source and can be reviewed or deleted. Wife never mines an
+agent's own response.
+
 **Which languages does it understand?**
 Spanish and English out of the box, and it writes each fact back in the language you said it in. Adding a language is a rule block in `src/core/extract.js` — pull requests welcome.
 
@@ -590,7 +691,7 @@ Spanish and English out of the box, and it writes each fact back in the language
 npm run check
 ```
 
-**247 unit tests**, a **78-check end-to-end run**, a **67-check multi-agent run**, and a **55-check multi-machine
+**254 unit tests**, a **78-check end-to-end run**, a **67-check multi-agent run**, and a **55-check multi-machine
 convergence run** using real git that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
 
 - a credential pasted into a prompt never appears anywhere under `~/.wife`
@@ -614,6 +715,9 @@ convergence run** using real git that spawns the real CLI and feeds it the exact
 - a commit guard blocks on main and allows the identical command on a feature branch
 - a malformed guard pattern allows the call instead of throwing
 - `PreToolUse` is not registered at all until a guard exists
+- a project checkpoint captures goal, progress, blockers, branch, commit, and changed paths
+- a context pack selects relevant memory and stays under its explicit token ceiling
+- project evidence is explicit, commit-linked, bounded, and rejects credentials before disk
 - Codex wires `Stop`, not `SessionEnd` — Codex has no such event, and a hook on
   a name that does not exist never fires and never says so
 - Cursor's `conversation_id` / `text` payload is understood, and Cursor gets an
@@ -648,6 +752,7 @@ Found a bug or have an idea? [Open an issue](https://github.com/ma-nucho-pro/wif
 **Roberto Manuel Jara Peche**
 
 <p>
+  <a href="https://arkeaia.com/"><img src="https://img.shields.io/badge/Website-arkeaia.com-2ea043?style=for-the-badge" alt="Arkea IA website" /></a>
   <a href="https://github.com/ma-nucho-pro"><img src="https://img.shields.io/badge/GitHub-ma--nucho--pro-181717?style=for-the-badge&logo=github" alt="GitHub" /></a>
   <a href="https://www.youtube.com/@ManuchoAI"><img src="https://img.shields.io/badge/YouTube-@ManuchoAI-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube" /></a>
   <a href="https://x.com/ManuchoAI"><img src="https://img.shields.io/badge/X-@ManuchoAI-000000?style=for-the-badge&logo=x&logoColor=white" alt="X" /></a>

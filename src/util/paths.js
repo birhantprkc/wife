@@ -24,6 +24,8 @@ export const paths = {
   projectMd: (key) => path.join(wifeHome(), 'projects', key, 'project.md'),
   projectIndex: (key) => path.join(wifeHome(), 'projects', key, 'project.index.json'),
   projectMeta: (key) => path.join(wifeHome(), 'projects', key, 'meta.json'),
+  projectCheckpoint: (key) => path.join(wifeHome(), 'projects', key, 'checkpoint.json'),
+  projectEvidence: (key) => path.join(wifeHome(), 'projects', key, 'evidence.jsonl'),
 };
 
 export function claudeHome() {

@@ -9,10 +9,11 @@ import { cmdInit, cmdAttach, cmdDetach, cmdSync as cmdSyncCodex, cmdDoctor, cmdC
 import { cmdSync, cmdClone, cmdSyncStatus, cmdMergeDriver } from '../src/commands/gitsync.js';
 import { cmdHarden, cmdGuards, cmdGuard } from '../src/commands/harden.js';
 import { cmdImport, cmdReview, cmdSpread } from '../src/commands/curate.js';
+import { cmdCheckpoint, cmdEvidence, cmdContext } from '../src/commands/continuity.js';
 import { c, say, fail } from '../src/util/out.js';
 import { withStateLock } from '../src/util/lock.js';
 
-export const VERSION = '1.4.0';
+export const VERSION = '1.5.0';
 
 const BOOLEAN_FLAGS = new Set([
   'help', 'version', 'verbose', 'quiet', 'json', 'raw', 'stdin', 'fix', 'force',
@@ -84,6 +85,14 @@ ${c.bold('Inspect')}
   doctor                   find duplicates, drift, broken wiring  ${c.gray('[--fix]')}
   config [key] [value]     read or change settings
 
+${c.bold('Project continuity')}
+  context "<task>"         build a bounded project context pack  ${c.gray('[--budget N] [--json]')}
+  checkpoint set            save goal, progress, next steps and blockers
+  checkpoint show           resume the current project without starting from scratch
+  checkpoint clear          remove the current project handoff
+  evidence add              record an explicit, redacted project receipt
+  evidence list             inspect project evidence  ${c.gray('[--json] [--limit N]')}
+
 ${c.bold('Lifecycle')} ${c.gray('(these are what the hooks call; you rarely run them by hand)')}
   inject                   print the memory block  ${c.gray('[--json]')}
   capture                  buffer a prompt from hook stdin
@@ -118,6 +127,9 @@ const ROUTES = {
   journal: cmdJournal,
   log: cmdJournal,
   doctor: cmdDoctor,
+  context: cmdContext,
+  checkpoint: cmdCheckpoint,
+  evidence: cmdEvidence,
   config: cmdConfig,
   inject: cmdInject,
   capture: cmdCapture,
@@ -136,6 +148,7 @@ const MEANINGFUL_EXIT = new Set(['guard']);
 const STATE_MUTATIONS = new Set([
   'init', 'sync', 'import', 'review', 'harden', 'guards',
   'remember', 'forget', 'pin', 'unpin', 'doctor', 'config',
+  'checkpoint', 'evidence',
 ]);
 
 export async function run(argv = process.argv.slice(2)) {

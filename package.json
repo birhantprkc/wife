@@ -1,7 +1,7 @@
 {
   "name": "wife-memory",
-  "version": "1.4.0",
-  "description": "Local, persistent and auditable memory layer for Claude Code and Codex. Your coding agent stops treating you like a stranger every morning.",
+  "version": "1.5.0",
+  "description": "Local-first, evidence-aware memory and project continuity for AI coding agents. Checkpoints, context packs and auditable receipts without telemetry.",
   "type": "module",
   "bin": {
     "wife": "bin/wife.js"
@@ -19,7 +19,7 @@
     "node": ">=18.17"
   },
   "scripts": {
-    "test": "node --test test/agents.test.js test/concurrency.test.js test/curation.test.js test/extract.test.js test/guards.test.js test/session-security.test.js test/store.test.js",
+    "test": "node --test test/agents.test.js test/concurrency.test.js test/continuity.test.js test/curation.test.js test/extract.test.js test/guards.test.js test/session-security.test.js test/store.test.js",
     "e2e": "node test/e2e.mjs",
     "sync-test": "node test/sync.mjs",
     "multiagent-test": "node test/multiagent.mjs",
@@ -30,6 +30,10 @@
     "codex",
     "ai-memory",
     "agent-memory",
+    "project-memory",
+    "project-continuity",
+    "evidence-aware",
+    "context-packs",
     "persistent-memory",
     "llm-memory",
     "cli",
@@ -52,7 +56,7 @@
     "url": "git+https://github.com/ma-nucho-pro/wife.git"
   },
   "author": "Roberto Manuel Jara Peche (https://github.com/ma-nucho-pro)",
-  "homepage": "https://github.com/ma-nucho-pro/wife#readme",
+  "homepage": "https://arkeaia.com/",
   "bugs": {
     "url": "https://github.com/ma-nucho-pro/wife/issues"
   }
