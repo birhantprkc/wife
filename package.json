@@ -12,7 +12,7 @@
     "install.sh",
     "README.md",
     "LICENSE",
-    "CLAUDE.md",
+    "assets",
     "AGENTS.md"
   ],
   "engines": {

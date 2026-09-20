@@ -258,6 +258,22 @@ describe('import — from the files people already keep', () => {
       "a repo convention must not follow the user into every other project");
   });
 
+  test('AGENTS.md is a project source when CLAUDE.md is absent', () => {
+    fs.writeFileSync(path.join(repo, 'AGENTS.md'), '## Repo\n- Never commit directly to main\n');
+
+    const config = loadConfig();
+    const identity = openIdentity(config);
+    const project = openProject(repo, config);
+    const { imported } = importFrom({ identity, project: project.store, config, cwd: repo });
+
+    assert.ok(sources(repo).some((source) => source.file === path.join(repo, 'AGENTS.md')),
+      'AGENTS.md must be discovered as a project instruction file');
+    assert.ok(imported.some((item) => /main/i.test(item.text)),
+      'the AGENTS.md rule must be imported into project memory');
+    assert.ok(project.store.facts().some((fact) => /main/i.test(fact.text)),
+      'the AGENTS.md rule must stay scoped to the project');
+  });
+
   test('dry run changes nothing on disk', () => {
     fs.writeFileSync(path.join(repo, 'CLAUDE.md'), '## Repo\n- Never commit directly to main\n');
     const config = loadConfig();

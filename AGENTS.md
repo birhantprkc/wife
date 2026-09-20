@@ -1,4 +1,10 @@
-# Wife — notes for the agent reading this (Codex reads this file)
+# Wife — shared instructions for coding agents
+
+This is Wife's canonical repository instruction file. The repository is
+intentionally `AGENTS.md`-first: Claude Code 2.1.77+ and Codex can read this
+file directly. There is no root
+`CLAUDE.md`, so Claude Code can take this file through its AGENTS discovery
+path instead of preferring a legacy file.
 
 Wife is a local memory layer for coding agents. It has zero runtime
 dependencies and no build step: the source in `src/` is what runs.

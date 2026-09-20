@@ -36,6 +36,7 @@
   <a href="#how-it-works">How it works</a> •
   <a href="#commands">Commands</a> •
   <a href="#project-continuity">Project continuity</a> •
+  <a href="#agentsmd-and-claude-code">AGENTS.md</a> •
   <a href="#security">Security</a> •
   <a href="#faq">FAQ</a>
 </p>
@@ -312,6 +313,28 @@ from user prompts, while project evidence is recorded deliberately with
 `wife evidence add`; it never captures an agent's own response or stores a
 raw transcript as project memory.
 
+## AGENTS.md and Claude Code
+
+Wife is now **AGENTS.md-first**. The repository ships one canonical
+`AGENTS.md` and intentionally does not ship a root `CLAUDE.md`. That matters
+because Claude Code 2.1.77+ checks `AGENTS.md` when there is no `CLAUDE.md` in
+the same folder; if both files exist, `CLAUDE.md` wins and the new discovery
+path is not used. Current Claude Code releases with `AGENTS.md` support and
+Codex can therefore read the same repository instructions directly.
+
+This file is separate from Wife's runtime memory hooks. `wife attach claude`
+still adds `SessionStart`, `UserPromptSubmit`, and `SessionEnd` hooks to Claude
+Code's `settings.json`; `AGENTS.md` is the repository-level guidance Claude
+reads before it starts working. The two layers complement each other:
+`AGENTS.md` describes how to work in the repo, while Wife injects the durable
+identity, project memory, checkpoints, and evidence for the current session.
+
+If you are migrating another repository, merge the useful instructions from
+its `CLAUDE.md` into `AGENTS.md`, then remove or rename the old file only after
+reviewing it. `wife import` continues to accept both filenames, including
+`CLAUDE.md` files that already exist in a user's home directory or another
+project.
+
 ### Every single fact is traceable
 
 ```
@@ -335,6 +358,16 @@ If you cannot see where a memory came from, you cannot trust it. Wife shows you.
 `~/.wife/identity.md` is the source of truth. Open it in any editor. **Delete a line and it is forgotten** — no command needed. **Add a line by hand and it is kept at full confidence.** `git init` it if you want history.
 
 No database. No daemon. No account. No network call. Ever.
+
+## See Wife in motion
+
+The short loop below is the visual identity for Wife. It is intentionally
+placed after the explanation of memory and project continuity so the README
+introduces the product before showing the animation.
+
+<p align="center">
+  <img src="assets/wife-logo-loop.gif" width="420" alt="Animated Wife logo" />
+</p>
 
 ---
 
@@ -364,7 +397,10 @@ tell me instead of using sudo.
 
 Then **restart your agent**. That is it.
 
-> This repo ships a `CLAUDE.md` and an `AGENTS.md`, so if your agent is already sitting inside the cloned folder it knows how to install itself without any prompt at all.
+> This repo ships `AGENTS.md` as its canonical instruction file. Claude Code
+> 2.1.77+ and Codex can read it directly. If your agent is already sitting
+> inside the cloned folder, it knows how to install itself without any prompt
+> at all.
 
 ### Option 2 — one command
 
@@ -392,10 +428,10 @@ Requires **Node 18.17 or newer**, which you already have if you are running Clau
 wife import          # --dry-run to see it first
 ```
 
-Reads `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and this repo's `CLAUDE.md`
-or `AGENTS.md`, and seeds memory from them. The scope of the file decides the
-scope of the fact: your user file becomes identity, the repo's file becomes
-project memory.
+Reads `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and this repo's
+`CLAUDE.md`, `AGENTS.md`, `AGENT.md`, or `.claude/CLAUDE.md`, and seeds memory
+from them. The scope of the file decides the scope of the fact: your user file
+becomes identity, the repo's file becomes project memory.
 
 Credentials are screened out before anything is written, code blocks and
 install steps are ignored, and Wife never re-reads its own managed block.
@@ -695,7 +731,7 @@ Spanish and English out of the box, and it writes each fact back in the language
 npm run check
 ```
 
-**254 unit tests**, a **78-check end-to-end run**, a **67-check multi-agent run**, and a **55-check multi-machine
+**255 unit tests**, a **78-check end-to-end run**, a **67-check multi-agent run**, and a **55-check multi-machine
 convergence run** using real git that spawns the real CLI and feeds it the exact JSON Claude Code puts on a hook's stdin. Among the things it proves:
 
 - a credential pasted into a prompt never appears anywhere under `~/.wife`
