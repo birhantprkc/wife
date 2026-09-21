@@ -49,6 +49,10 @@
 </p>
 <!-- manucho-readme-banner:end -->
 
+<p align="center">
+  <img src="assets/readme/project-logo.svg" width="240" alt="Wife 3D project logo">
+</p>
+
 ```
 $ wife show
 
