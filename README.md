@@ -43,6 +43,12 @@
 
 ---
 
+<!-- manucho-readme-banner:start -->
+<p align="center">
+  <img src="assets/readme/banner.svg" alt="WIFE project overview" width="100%">
+</p>
+<!-- manucho-readme-banner:end -->
+
 ```
 $ wife show
 
